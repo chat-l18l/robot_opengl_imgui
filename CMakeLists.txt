@@ -84,3 +84,15 @@ target_link_libraries(robot_viewer PRIVATE
     dl
     pthread
 )
+
+# ============================================================
+# Tests
+#
+# Host-side only: they need no window, no GL context and no robot,
+# so they are cheap enough to build by default. Run with ctest.
+# ============================================================
+option(BUILD_TESTING "Build the host-side tests" ON)
+if(BUILD_TESTING)
+    enable_testing()
+    add_subdirectory(tests/ui_input)
+endif()

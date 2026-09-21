@@ -56,6 +56,17 @@ grabbing the middle of a floating panel to move it turned the arm instead. Drop
 `io.ConfigWindowsMoveFromTitleBarOnly` in `src/main.cpp` to get the default
 back.
 
+## Tests
+
+There is one host-side test, covering how pointer input is split between the
+camera and the panels. It needs no window and no GL context.
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+See `tests/ui_input/README.md` for what it checks.
+
 ## Panels
 
 Both panels live in a dock space: drag a tab to re-dock, split or tear one
