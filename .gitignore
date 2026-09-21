@@ -1,0 +1,11 @@
+# Build output
+build/
+build-*/
+
+# Runtime state written by Dear ImGui next to the executable
+imgui.ini
+
+# Editor / tooling
+.cache/
+compile_commands.json
+*.swp
