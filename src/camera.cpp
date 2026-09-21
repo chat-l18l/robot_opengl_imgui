@@ -64,22 +64,17 @@ void rbt_camera_input(rbt_camera_t *camera, const rbt_camera_input_t *input)
     assert(camera != NULL);
     assert(input != NULL);
 
-    if (input->over_view && input->wheel != 0.0f) {
+    if (input->wheel != 0.0f) {
         camera->distance = std::clamp(camera->distance - input->wheel * s_zoom_per_notch,
                                       s_min_distance, s_max_distance);
     }
 
-    /* A drag begins only over the viewport; releasing the button ends it
-     * wherever the pointer is, so re-entering never resumes a stale drag. */
-    const bool orbit_active = camera->orbiting ? input->orbit_down
-                                               : (input->orbit_down && input->over_view && !camera->panning);
-    const bool pan_active   = camera->panning ? input->pan_down
-                                              : (input->pan_down && input->over_view && !camera->orbiting);
+    /* One drag at a time: the button that claimed the view keeps it. */
+    const bool orbit = input->orbit && !camera->panning;
+    const bool pan   = input->pan && !orbit && !camera->orbiting;
 
-    const bool orbit_started = orbit_active && !camera->orbiting;
-    const bool pan_started   = pan_active && !camera->panning;
-
-    if (orbit_started || pan_started) {
+    const bool started = (orbit && !camera->orbiting) || (pan && !camera->panning);
+    if (started) {
         camera->last_mouse_x = input->mouse_x;
         camera->last_mouse_y = input->mouse_y;
     }
@@ -87,11 +82,11 @@ void rbt_camera_input(rbt_camera_t *camera, const rbt_camera_input_t *input)
     const float dx = input->mouse_x - camera->last_mouse_x;
     const float dy = input->mouse_y - camera->last_mouse_y;
 
-    if (orbit_active && !orbit_started) {
-        camera->yaw_deg   -= dx * s_orbit_deg_per_pixel;
-        camera->pitch_deg  = std::clamp(camera->pitch_deg + dy * s_orbit_deg_per_pixel,
-                                        -s_max_pitch_deg, s_max_pitch_deg);
-    } else if (pan_active && !pan_started) {
+    if (orbit && !started) {
+        camera->yaw_deg  -= dx * s_orbit_deg_per_pixel;
+        camera->pitch_deg = std::clamp(camera->pitch_deg + dy * s_orbit_deg_per_pixel,
+                                       -s_max_pitch_deg, s_max_pitch_deg);
+    } else if (pan && !started) {
         /* Slide in the camera's screen plane: right follows yaw, up is world up. */
         const float    yaw = rbt_deg_to_rad(camera->yaw_deg);
         const Vector3f right(std::cos(yaw), 0.0f, -std::sin(yaw));
@@ -101,11 +96,11 @@ void rbt_camera_input(rbt_camera_t *camera, const rbt_camera_input_t *input)
         camera->target += Vector3f(0.0f, 1.0f, 0.0f) * (dy * amount);
     }
 
-    if (orbit_active || pan_active) {
+    if (orbit || pan) {
         camera->last_mouse_x = input->mouse_x;
         camera->last_mouse_y = input->mouse_y;
     }
 
-    camera->orbiting = orbit_active;
-    camera->panning  = pan_active;
+    camera->orbiting = orbit;
+    camera->panning  = pan;
 }

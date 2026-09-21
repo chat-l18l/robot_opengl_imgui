@@ -48,7 +48,13 @@ cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug && cmake --build build-debug 
 
 A drag starts only over the 3D viewport, but continues until the button is
 released, wherever the pointer goes. The viewport claims the pointer while it
-is over it, so dragging inside it never moves the panel.
+is over it, so dragging inside it orbits rather than moving the panel.
+
+Panels therefore move by their title bar or tab, never by their body. ImGui
+allows a body drag by default, which over the 3D view competes with orbiting:
+grabbing the middle of a floating panel to move it turned the arm instead. Drop
+`io.ConfigWindowsMoveFromTitleBarOnly` in `src/main.cpp` to get the default
+back.
 
 ## Panels
 

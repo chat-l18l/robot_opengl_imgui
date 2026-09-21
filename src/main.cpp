@@ -518,6 +518,11 @@ int main(void)
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    /* Panels move by their title bar or tab only. By default a panel can be
+     * dragged from anywhere in its body, which over the 3D view competes with
+     * orbiting: grabbing the middle of a floating panel to move it turned the
+     * arm instead. */
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
     /* Multi-viewport stays off: a panel in its own OS window would not share
      * the framebuffer the scene is rendered into. */
     io.IniFilename = s_resolve_layout_path();
@@ -570,15 +575,15 @@ int main(void)
         rbt_robot_update_fk(&s_robot);
         const rbt_viewport_t view = s_draw_viewport();
 
-        /* Fed every frame, hovered or not, so an ongoing drag notices the
-         * button coming up after the pointer has left the view. */
+        /* view.active is ImGui's own answer to "this item holds the pointer":
+         * true from the press inside the view until the release, wherever the
+         * pointer wanders, and cleared for us if the window loses focus. */
         const rbt_camera_input_t camera_input = {
             io.MousePos.x,
             io.MousePos.y,
             view.hovered ? io.MouseWheel : 0.0f,
-            ImGui::IsMouseDown(ImGuiMouseButton_Left),
-            ImGui::IsMouseDown(ImGuiMouseButton_Right),
-            view.hovered || view.active,
+            view.active && ImGui::IsMouseDown(ImGuiMouseButton_Left),
+            view.active && ImGui::IsMouseDown(ImGuiMouseButton_Right),
         };
         rbt_camera_input(&s_camera, &camera_input);
 
