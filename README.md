@@ -19,7 +19,8 @@ sudo apt install cmake g++ libglfw3-dev libeigen3-dev mesa-common-dev
 cmake -S . -B build && cmake --build build -j$(nproc)
 ```
 
-The first configure downloads Dear ImGui through FetchContent. The build type
+The first configure downloads Dear ImGui through FetchContent, pinned to
+`v1.91.8-docking` because the panels use a dock space. The build type
 defaults to `Release`; Eigen without an optimiser is an order of magnitude
 slower, so an unset build type is worth avoiding. For a debug build with the
 asserts active:
@@ -46,7 +47,26 @@ cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug && cmake --build build-debug 
 | Reset everything | "Reset All Joints" |
 
 A drag starts only over the 3D viewport, but continues until the button is
-released, wherever the pointer goes.
+released, wherever the pointer goes. The viewport claims the pointer while it
+is over it, so dragging inside it never moves the panel.
+
+## Panels
+
+Both panels live in a dock space: drag a tab to re-dock, split or tear one
+loose. The first run lays the 3D view out on the left and the controls on the
+right; after that the arrangement is restored from
+
+```
+$XDG_CONFIG_HOME/robot_viewer/imgui.ini    # or ~/.config/robot_viewer/imgui.ini
+```
+
+That path is fixed rather than relative to the working directory, so starting
+from the source tree and from `build/` give the same layout. Delete the file to
+get the default arrangement back.
+
+Multi-viewport (panels as separate OS windows) is deliberately off: the 3D
+scene is drawn into the main window's framebuffer under a scissor rectangle,
+which a panel in its own OS window could not share.
 
 ## Layout
 
