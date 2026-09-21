@@ -38,17 +38,31 @@ The binary can also be run directly, and prints one line per check:
 
 It exits non-zero when any check fails.
 
-## What it does and does not exercise
+## What it exercises
 
-It links the real `src/camera.cpp` and drives the real `rbt_camera_input()`, so
-the camera is genuinely under test.
+The real thing, not a copy. It links `src/ui_layout.cpp` and `src/camera.cpp`
+and drives `rbt_ui_configure_io()`, `rbt_ui_dockspace()`,
+`rbt_viewport_begin()` and `rbt_viewport_camera_input()` — the same functions
+`main.cpp` calls. The only thing the test supplies itself is the dock
+arrangement, because it needs panels both docked and floating, which the
+application never varies.
 
-The ImGui calls in the test mirror `s_draw_viewport()` in `src/main.cpp`
-instead of sharing code with it, because that function also renders. **If the
-`Begin` / `InvisibleButton` / `End` sequence there changes, change it here
-too**, or the test will keep passing while saying nothing about the
-application.
+Mutating `src/ui_layout.cpp` fails it:
 
-Both fixes it guards were mutation-checked: replacing the `InvisibleButton`
-with `IsWindowHovered()` fails the floating title bar case, and clearing
-`ConfigWindowsMoveFromTitleBarOnly` fails the controls body case.
+| Change | Check that fails |
+|--------|------------------|
+| `InvisibleButton` replaced by `IsWindowHovered()` | Floating title bar: camera does not turn |
+| `ConfigWindowsMoveFromTitleBarOnly` cleared | Controls body: does not move it |
+| Wheel no longer gated on `hovered` | Wheel outside the view does not zoom |
+| Drag no longer gated on `active` | Both title bar cases |
+
+## Two timing details it depends on
+
+The camera is fed from inside the frame, before `Render()`, exactly where
+`main.cpp` does it. `io.MouseWheel` only holds its value for the duration of a
+frame, so reading it afterwards yields zero and the wheel checks pass while
+testing nothing.
+
+ImGui trickles its input queue, so a pointer move and a wheel notch submitted
+in the same frame do not both land in that frame. `s_wheel_at()` separates
+them, as real hardware does.

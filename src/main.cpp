@@ -23,9 +23,9 @@
 #include "gl_shader.h"
 #include "gl_target.h"
 #include "robot.h"
+#include "ui_layout.h"
 
 #include <imgui.h>
-#include <imgui_internal.h>  /* DockBuilder, for the first-run layout. */
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
@@ -130,8 +130,6 @@ static const float s_fov_deg        = 45.0f;
 static const float s_z_near         = 0.1f;
 static const float s_z_far          = 100.0f;
 
-/** Fraction of the width the control panel takes in the first-run layout. */
-static const float s_control_panel_fraction = 0.24f;
 /** Inset of the hint text from the viewport's top-left corner, in pixels. */
 static const float s_overlay_margin = 10.0f;
 /**
@@ -140,12 +138,6 @@ static const float s_overlay_margin = 10.0f;
  * sample is CPU work rather than free silicon.
  */
 static const GLint s_scene_samples = 4;
-
-/* Window titles are the keys the dock layout is stored under; changing one
- * silently drops that panel out of an existing saved layout. */
-static const char *s_viewport_title  = "Robot 3D View";
-static const char *s_controls_title  = "Joint Controls";
-static const char *s_dockspace_id    = "RobotViewerDockSpace";
 
 /** Directory and file the window layout is persisted in. */
 static const char *s_config_dir_name  = "robot_viewer";
@@ -163,13 +155,6 @@ static rbt_target_t s_target;
 static bool s_show_grid = true;
 static bool s_wireframe = false;
 
-/** @brief Where the 3D viewport panel ended up this frame. */
-typedef struct {
-    ImVec2 pos;      /**< Content-region top-left, in screen coordinates. */
-    ImVec2 size;     /**< Content-region size, in screen coordinates. */
-    bool   hovered;  /**< Pointer is over the view and no other window covers it. */
-    bool   active;   /**< The view is holding the pointer for a drag. */
-} rbt_viewport_t;
 
 /* ============================================================
  * Layout persistence
@@ -267,71 +252,6 @@ static const char *s_resolve_layout_path(void)
 }
 
 /* ============================================================
- * Dock space
- * ============================================================ */
-
-/**
- * @brief Lay the panels out: 3D view on the left, controls on the right.
- *
- * Only runs when no layout was restored, so a layout the user arranged is
- * never overwritten.
- */
-static void s_build_default_layout(ImGuiID dockspace_id, const ImVec2 &size)
-{
-    ImGui::DockBuilderRemoveNode(dockspace_id);
-    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
-    ImGui::DockBuilderSetNodeSize(dockspace_id, size);
-
-    ImGuiID controls_node = 0;
-    ImGuiID view_node     = 0;
-    ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Right, s_control_panel_fraction,
-                                &controls_node, &view_node);
-
-    ImGui::DockBuilderDockWindow(s_viewport_title, view_node);
-    ImGui::DockBuilderDockWindow(s_controls_title, controls_node);
-    ImGui::DockBuilderFinish(dockspace_id);
-}
-
-/**
- * @brief Host window filling the OS window, holding the dock space.
- *
- * NoBackground is load-bearing: the 3D scene is already in the framebuffer by
- * the time ImGui's draw data is submitted, so a host that painted a background
- * would cover it.
- */
-static void s_draw_dockspace(void)
-{
-    const ImGuiViewport *viewport = ImGui::GetMainViewport();
-
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
-    ImGui::SetNextWindowViewport(viewport->ID);
-
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking
-                                 | ImGuiWindowFlags_NoTitleBar
-                                 | ImGuiWindowFlags_NoCollapse
-                                 | ImGuiWindowFlags_NoResize
-                                 | ImGuiWindowFlags_NoMove
-                                 | ImGuiWindowFlags_NoBringToFrontOnFocus
-                                 | ImGuiWindowFlags_NoNavFocus
-                                 | ImGuiWindowFlags_NoBackground;
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin("##DockHost", NULL, flags);
-    ImGui::PopStyleVar(3);
-
-    const ImGuiID dockspace_id = ImGui::GetID(s_dockspace_id);
-    if (ImGui::DockBuilderGetNode(dockspace_id) == NULL) {
-        s_build_default_layout(dockspace_id, viewport->WorkSize);
-    }
-    ImGui::DockSpace(dockspace_id);
-
-    ImGui::End();
-}
-
-/* ============================================================
  * Rendering
  * ============================================================ */
 
@@ -347,30 +267,11 @@ static void s_glfw_error(int error, const char *description)
  */
 static rbt_viewport_t s_draw_viewport(void)
 {
-    rbt_viewport_t view = {ImVec2(0.0f, 0.0f), ImVec2(0.0f, 0.0f), false, false};
-
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar
-                                 | ImGuiWindowFlags_NoScrollWithMouse
-                                 | ImGuiWindowFlags_NoBackground;
-
-    /* Begin() reports false for a collapsed panel or an inactive dock tab. */
-    const bool visible = ImGui::Begin(s_viewport_title, NULL, flags);
-    view.pos  = ImGui::GetCursorScreenPos();
-    view.size = ImGui::GetContentRegionAvail();
-
-    if (!visible || view.size.x < 1.0f || view.size.y < 1.0f) {
-        ImGui::End();
+    const rbt_viewport_t view = rbt_viewport_begin();
+    if (!view.visible) {
+        rbt_viewport_end();
         return view;
     }
-
-    /* Claim the content rectangle. With no item under the pointer, ImGui reads
-     * a press here as a drag of the panel itself, which is what let the panel
-     * move and the camera orbit from the same mouse delta. An item also gives
-     * proper hit testing, so a panel on top of this one takes the pointer. */
-    ImGui::InvisibleButton("##viewport", view.size,
-                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
-    view.hovered = ImGui::IsItemHovered();
-    view.active  = ImGui::IsItemActive();
 
     /* The panel is measured in ImGui's screen coordinates; the texture is
      * allocated in framebuffer pixels, which differ on a HiDPI display. */
@@ -379,7 +280,7 @@ static rbt_viewport_t s_draw_viewport(void)
     const GLsizei pixel_h = (GLsizei)(view.size.y * io.DisplayFramebufferScale.y);
 
     if (!rbt_target_resize(&s_target, pixel_w, pixel_h, s_scene_samples)) {
-        ImGui::End();
+        rbt_viewport_end();
         return view;
     }
 
@@ -424,7 +325,7 @@ static rbt_viewport_t s_draw_viewport(void)
     ImGui::SetCursorScreenPos(ImVec2(view.pos.x + s_overlay_margin, view.pos.y + s_overlay_margin));
     ImGui::TextColored(ImVec4(0.7f, 0.8f, 1.0f, 0.8f), "LMB: orbit | RMB: pan | scroll: zoom");
 
-    ImGui::End();
+    rbt_viewport_end();
     return view;
 }
 
@@ -433,7 +334,7 @@ static void s_draw_control_panel(void)
 {
     const ImGuiIO &io = ImGui::GetIO();
 
-    ImGui::Begin(s_controls_title, NULL, 0);
+    ImGui::Begin(RBT_CONTROLS_TITLE, NULL, 0);
 
     if (ImGui::CollapsingHeader("Robot", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::Button("Reset All Joints")) {
@@ -517,12 +418,7 @@ int main(void)
 
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    /* Panels move by their title bar or tab only. By default a panel can be
-     * dragged from anywhere in its body, which over the 3D view competes with
-     * orbiting: grabbing the middle of a floating panel to move it turned the
-     * arm instead. */
-    io.ConfigWindowsMoveFromTitleBarOnly = true;
+    rbt_ui_configure_io();
     /* Multi-viewport stays off: a panel in its own OS window would not share
      * the framebuffer the scene is rendered into. */
     io.IniFilename = s_resolve_layout_path();
@@ -570,21 +466,12 @@ int main(void)
         glClearColor(s_window_clear[0], s_window_clear[1], s_window_clear[2], 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        s_draw_dockspace();
+        rbt_ui_dockspace(rbt_ui_default_layout);
 
         rbt_robot_update_fk(&s_robot);
         const rbt_viewport_t view = s_draw_viewport();
 
-        /* view.active is ImGui's own answer to "this item holds the pointer":
-         * true from the press inside the view until the release, wherever the
-         * pointer wanders, and cleared for us if the window loses focus. */
-        const rbt_camera_input_t camera_input = {
-            io.MousePos.x,
-            io.MousePos.y,
-            view.hovered ? io.MouseWheel : 0.0f,
-            view.active && ImGui::IsMouseDown(ImGuiMouseButton_Left),
-            view.active && ImGui::IsMouseDown(ImGuiMouseButton_Right),
-        };
+        const rbt_camera_input_t camera_input = rbt_viewport_camera_input(&view);
         rbt_camera_input(&s_camera, &camera_input);
 
         s_draw_control_panel();

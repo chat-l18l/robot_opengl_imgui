@@ -100,6 +100,7 @@ src/
 ├── gl_mesh.*     — VAO/VBO ownership and the primitive generators
 ├── gl_target.*   — offscreen framebuffer the scene renders into
 ├── camera.*      — orbit camera
+├── ui_layout.*   — dock space and the viewport panel's pointer handling
 └── robot.*       — joint table, forward kinematics, arm rendering
 ```
 

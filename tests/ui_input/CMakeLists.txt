@@ -7,6 +7,7 @@
 add_executable(ui_input_test
     ui_input_test.cpp
     ${CMAKE_SOURCE_DIR}/src/camera.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui_layout.cpp
 )
 target_include_directories(ui_input_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(ui_input_test SYSTEM PRIVATE ${EIGEN_INCLUDE_DIRS})

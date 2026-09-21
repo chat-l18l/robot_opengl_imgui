@@ -66,6 +66,7 @@ add_executable(robot_viewer
     src/gl_mesh.cpp
     src/gl_shader.cpp
     src/gl_target.cpp
+    src/ui_layout.cpp
     src/robot.cpp
 )
 target_include_directories(robot_viewer PRIVATE src)
