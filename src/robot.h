@@ -1,88 +1,82 @@
-// ============================================================
-// robot.h — Robot arm definitie: joints, links, forward kinematics
-// ============================================================
+/**
+ * @file robot.h
+ * @brief Robot arm: joint tree, forward kinematics and rendering.
+ */
+
 #pragma once
 
-#include "gl_utils.h"
+#include "gl_mesh.h"
+#include "gl_shader.h"
+
 #include <vector>
-#include <string>
 
-// Rotatie-as van een joint
-enum class Axis { X, Y, Z };
+/** @brief Rotation axis of a revolute joint, in its own frame. */
+typedef enum {
+    RBT_AXIS_X = 0,
+    RBT_AXIS_Y,
+    RBT_AXIS_Z,
+} rbt_axis_t;
 
-// Beschrijft één roterende joint + de link die erop volgt
-struct RobotJoint {
-    std::string name;
+/**
+ * @brief One revolute joint and the link that reaches it from its parent.
+ *
+ * The link is not stored separately: its length is the Y component of
+ * @ref offset, so there is exactly one place that says how long it is.
+ */
+typedef struct rbt_joint_t {
+    const char *name;             /**< Static string; joints do not own their name. */
+    rbt_axis_t  axis;             /**< Rotation axis. */
+    float       min_angle_deg;    /**< Lower travel limit. */
+    float       max_angle_deg;    /**< Upper travel limit. */
+    float       default_angle_deg;/**< Pose restored by rbt_robot_reset_joints. */
+    float       angle_deg;        /**< Live angle, driven by the UI. */
+    Vector3f    offset;           /**< Parent joint to this joint, in the parent frame. */
+    float       link_radius;      /**< Radius of the link drawn along that offset. */
+    float       color[3];         /**< RGB in 0..1, used for the link and the joint marker. */
 
-    // Joint properties
-    Axis   axis         = Axis::Y;
-    float  minAngle     = -180.0f;  // graden
-    float  maxAngle     =  180.0f;
-    float  currentAngle = 0.0f;     // graden
-    float  defaultAngle = 0.0f;
+    Matrix4f    world_transform;  /**< Written by rbt_robot_update_fk. */
+    std::vector<rbt_joint_t> children;
+} rbt_joint_t;
 
-    // Offset van parent joint naar deze joint (in parent's frame)
-    Vector3f offset = {0, 0, 0};
+/**
+ * @brief The arm: its joint tree, a flat view of it, and the shared primitives.
+ *
+ * @ref joints points into @ref base. The tree must not be modified after
+ * rbt_robot_build, or those pointers dangle.
+ */
+typedef struct {
+    rbt_joint_t base;                 /**< Root of the kinematic tree. */
+    std::vector<rbt_joint_t *> joints;/**< Depth-first view, built once for the UI. */
 
-    // Visualisatie van de link NA deze joint
-    float linkLength = 0.0f;
-    float linkRadius = 0.06f;
+    rbt_mesh_t cylinder;              /**< Unit cylinder: radius 1, height 1, along +Y. */
+    rbt_mesh_t sphere;                /**< Unit sphere: radius 1. */
+    rbt_mesh_t box;                   /**< Unit cube. */
+} rbt_robot_t;
 
-    // Kleur (RGB 0-1)
-    float color[3] = {0.4f, 0.6f, 0.9f};
+/**
+ * @brief Build the joint tree and generate the primitive meshes on the CPU.
+ *
+ * No GL calls happen here, so this may run before a context exists.
+ * Post: every joint sits at its default angle and @ref rbt_robot_t::joints is valid.
+ */
+void rbt_robot_build(rbt_robot_t *robot);
 
-    // Berekende world transformatie (na FK update)
-    Matrix4f worldTransform = Matrix4f::Identity();
+/** @brief Upload the primitives. Pre: a GL context is current. */
+void rbt_robot_upload_meshes(rbt_robot_t *robot);
 
-    // Child joints
-    std::vector<RobotJoint> children;
+/** @brief Restore every joint to its default angle. */
+void rbt_robot_reset_joints(rbt_robot_t *robot);
 
-    /// Voeg een child joint toe en geef referentie terug
-    RobotJoint& addChild(const std::string& name) {
-        children.push_back(RobotJoint());
-        children.back().name = name;
-        return children.back();
-    }
-};
+/** @brief Recompute every world transform from the current joint angles. */
+void rbt_robot_update_fk(rbt_robot_t *robot);
 
-// ============================================================
-// Robot class — bevat de hele kinematic chain + rendering
-// ============================================================
-class Robot {
-public:
-    Robot();
-    ~Robot() = default;
+/**
+ * @brief Draw the arm.
+ *
+ * Pre: rbt_robot_update_fk ran this frame and rbt_shader_set_frame was called
+ * on @p shader.
+ */
+void rbt_robot_draw(const rbt_robot_t *robot, const rbt_shader_t *shader);
 
-    /// Reset alle joints naar default posities
-    void resetJoints(RobotJoint& joint);
-
-    /// Forward kinematics: update alle worldTransforms recursief
-    void updateFK(RobotJoint& joint, const Matrix4f& parentTransform);
-
-    /// Teken de hele robot (view en proj worden doorgegeven)
-    void draw(GLuint program, const Matrix4f& view, const Matrix4f& proj,
-              RobotJoint& joint);
-
-    /// Upload geometry naar GPU
-    void initMeshes();
-
-    /// convenience
-    void resetAllJoints() { resetJoints(base); }
-    void updateAllFK()    { updateFK(base, Matrix4f::Identity()); }
-    void drawAll(GLuint program, const Matrix4f& view, const Matrix4f& proj) {
-        draw(program, view, proj, base);
-    }
-
-    /// Verzamel alle joints plat in een vector (voor UI sliders)
-    std::vector<RobotJoint*> flattenJoints(RobotJoint& joint);
-    std::vector<RobotJoint*> getAllJoints() { return flattenJoints(base); }
-
-    /// De root joint (base)
-    RobotJoint base;
-
-private:
-    Mesh cylinderMesh;
-    Mesh sphereMesh;
-    Mesh boxMesh;
-    bool meshesReady = false;
-};
+/** @brief Short label for a rotation axis, for the UI. */
+const char *rbt_axis_label(rbt_axis_t axis);

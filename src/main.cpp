@@ -1,435 +1,381 @@
-// ============================================================
-// main.cpp — ImGui + OpenGL3 Robot Viewer
-//
-// Renders een 6-DOF robot arm in een ImGui viewport.
-// Joints kunnen via sliders worden ingesteld.
-// Muis: links-drag=rotatie, rechts-drag=pan, scroll=zoom
-//
-// Dependencies: Eigen3, GLFW3, OpenGL 3.3+
-// Build: cmake + make (zie CMakeLists.txt)
-// ============================================================
+/**
+ * @file main.cpp
+ * @brief Dear ImGui + OpenGL 3.3 viewer for a 6-DOF robot arm.
+ *
+ * One window, two panels: a 3D viewport and a joint control panel. The 3D is
+ * rendered straight into the default framebuffer under a scissor rectangle
+ * matching the viewport panel, before ImGui's own draw data is submitted, so
+ * the UI composites over it. That avoids a render target and a resolve, at the
+ * cost of only ever supporting one 3D view.
+ *
+ * Dependencies: Eigen3, GLFW3, OpenGL 3.3+, Dear ImGui (fetched by CMake).
+ */
 
 #include "gl_core.h"
-#include "gl_utils.h"
-#include "robot.h"
+
 #include "camera.h"
+#include "gl_math.h"
+#include "gl_mesh.h"
+#include "gl_shader.h"
+#include "robot.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+
 #include <GLFW/glfw3.h>
 
-#include <iostream>
-#include <cmath>
+#include <stdio.h>
 
-// ============================================================
-// Vertex & Fragment Shaders (inline, geen externe bestanden)
-// ============================================================
+/* ============================================================
+ * Shaders
+ *
+ * Blinn-Phong with a key light, a fixed fill light from behind and a
+ * subtle rim term, which is what gives the parts their moulded look.
+ * ============================================================ */
 
-static const char* VERTEX_SHADER = R"(
+static const char *s_vertex_shader = R"(
 #version 330 core
 
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNormal;
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
 
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProjection;
-uniform mat3 uNormalMatrix;
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform mat3 u_normal_matrix;
 
-out vec3 FragPos;
-out vec3 Normal;
+out vec3 v_world_pos;
+out vec3 v_normal;
 
-void main() {
-    vec4 worldPos = uModel * vec4(aPos, 1.0);
-    FragPos = worldPos.xyz;
-    Normal  = normalize(uNormalMatrix * aNormal);
-    gl_Position = uProjection * uView * worldPos;
+void main()
+{
+    vec4 world_pos = u_model * vec4(a_position, 1.0);
+    v_world_pos = world_pos.xyz;
+    v_normal    = normalize(u_normal_matrix * a_normal);
+    gl_Position = u_projection * u_view * world_pos;
 }
 )";
 
-static const char* FRAGMENT_SHADER = R"(
+static const char *s_fragment_shader = R"(
 #version 330 core
 
-in vec3 FragPos;
-in vec3 Normal;
+in vec3 v_world_pos;
+in vec3 v_normal;
 
-uniform vec3 uColor;
-uniform vec3 uLightPos;
-uniform vec3 uViewPos;
+uniform vec3 u_color;
+uniform vec3 u_light_pos;
+uniform vec3 u_view_pos;
 
-out vec4 FragColor;
+out vec4 frag_color;
 
-void main() {
-    // Ambient
-    float ambientStrength = 0.35f;
-    vec3 ambient = ambientStrength * uColor;
+const vec3  FILL_LIGHT_POS = vec3(-3.0, 5.0, -5.0);
+const float AMBIENT        = 0.35;
+const float KEY_STRENGTH   = 0.80;
+const float FILL_STRENGTH  = 0.25;
+const float SPECULAR       = 0.30;
+const float SHININESS      = 32.0;
 
-    // Diffuse
-    vec3 norm = normalize(Normal);
-    vec3 lightDir = normalize(uLightPos - FragPos);
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * uColor * 0.8f;
+void main()
+{
+    vec3 normal   = normalize(v_normal);
+    vec3 view_dir = normalize(u_view_pos - v_world_pos);
 
-    // Specular (Blinn-Phong)
-    vec3 viewDir = normalize(uViewPos - FragPos);
-    vec3 halfDir = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(norm, halfDir), 0.0), 32.0);
-    vec3 specular = spec * vec3(0.3f);
+    vec3 key_dir  = normalize(u_light_pos - v_world_pos);
+    vec3 fill_dir = normalize(FILL_LIGHT_POS - v_world_pos);
 
-    // Tweede lichtbron (van achter, fill light)
-    vec3 lightDir2 = normalize(vec3(-3.0, 5.0, -5.0) - FragPos);
-    float diff2 = max(dot(norm, lightDir2), 0.0);
-    vec3 diffuse2 = diff2 * uColor * 0.25f;
+    vec3 lit = u_color * (AMBIENT
+                        + KEY_STRENGTH  * max(dot(normal, key_dir),  0.0)
+                        + FILL_STRENGTH * max(dot(normal, fill_dir), 0.0));
 
-    // Outline effect voor robot look
-    float edgeFactor = 1.0 - abs(dot(norm, viewDir));
-    vec3 rimColor = vec3(0.1, 0.1, 0.15) * pow(edgeFactor, 3.0) * 0.5f;
+    vec3 half_dir = normalize(key_dir + view_dir);
+    lit += vec3(SPECULAR) * pow(max(dot(normal, half_dir), 0.0), SHININESS);
 
-    vec3 result = ambient + diffuse + diffuse2 + specular + rimColor;
-    FragColor = vec4(result, 1.0);
+    // Rim term: darkens surfaces turning away from the camera.
+    float rim = 1.0 - abs(dot(normal, view_dir));
+    lit += vec3(0.1, 0.1, 0.15) * pow(rim, 3.0) * 0.5;
+
+    frag_color = vec4(lit, 1.0);
 }
 )";
 
-// ============================================================
-// Global state
-// ============================================================
+/* ============================================================
+ * Application state
+ * ============================================================ */
 
-static GLuint  gShaderProgram = 0;
-static Robot   gRobot;
-static OrbitCamera gCamera;
-static Mesh    gGridMesh;
-static bool    gShowGrid = true;
-static bool    gShowAxes = true;
-static bool    gWireframe = false;
+/** Window background, behind the ImGui panels. */
+static const float s_window_clear[3] = {0.12f, 0.13f, 0.16f};
+/** Viewport background, behind the 3D scene. */
+static const float s_viewport_clear[3] = {0.09f, 0.10f, 0.13f};
+/** Key light position in world space. */
+static const Vector3f s_light_pos(5.0f, 8.0f, 5.0f);
+/** Grid colour, dim enough to stay behind the arm. */
+static const float s_grid_color[3] = {0.25f, 0.25f, 0.28f};
 
-// ============================================================
-// OpenGL setup
-// ============================================================
+static const float s_grid_size     = 10.0f;
+static const int   s_grid_divisions = 20;
+static const float s_fov_deg       = 45.0f;
+static const float s_z_near        = 0.1f;
+static const float s_z_far         = 100.0f;
 
-static void initOpenGL() {
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_MULTISAMPLE);
-    glClearColor(0.12f, 0.13f, 0.16f, 1.0f);
+static const int s_control_panel_width = 310;
 
-    // Shader
-    gShaderProgram = createProgramFromSource(VERTEX_SHADER, FRAGMENT_SHADER);
-    if (!gShaderProgram) {
-        std::cerr << "FATAL: Shader compilation failed!" << std::endl;
-        std::exit(1);
-    }
+static rbt_shader_t s_shader;
+static rbt_robot_t  s_robot;
+static rbt_camera_t s_camera;
+static rbt_mesh_t   s_grid;
 
-    // Grid
-    gGridMesh = makeGrid(10.0f, 20);
-    gGridMesh.upload();
+static bool s_show_grid = true;
+static bool s_wireframe = false;
+
+/** @brief Where the 3D viewport panel ended up this frame. */
+typedef struct {
+    ImVec2 pos;        /**< Top-left in screen coordinates. */
+    ImVec2 size;       /**< Size in screen coordinates. */
+    bool   hovered;    /**< Pointer is over the panel. */
+} rbt_viewport_t;
+
+/* ============================================================
+ * Rendering
+ * ============================================================ */
+
+static void s_glfw_error(int error, const char *description)
+{
+    fprintf(stderr, "glfw: error %d: %s\n", error, description);
 }
 
-// ============================================================
-// 3D Viewport rendering (binnen ImGui window)
-// ============================================================
+/**
+ * @brief Draw the 3D scene inside an ImGui panel.
+ *
+ * The panel is borderless and background-less; the GL scissor rectangle is
+ * what actually confines the scene to it.
+ *
+ * @return The panel's geometry, so the caller can route pointer input to it.
+ */
+static rbt_viewport_t s_draw_viewport(void)
+{
+    rbt_viewport_t view = {ImVec2(0, 0), ImVec2(0, 0), false};
 
-/// Bewaar viewport state voordat ImGui het window opbouwt
-struct ViewportInfo {
-    ImVec2 pos;
-    ImVec2 size;
-    bool   isHovered;
-};
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar
+                                 | ImGuiWindowFlags_NoScrollWithMouse
+                                 | ImGuiWindowFlags_NoBackground;
 
-static ViewportInfo render3DViewport() {
-    ViewportInfo vp;
-    vp.pos = ImVec2(0, 0);
-    vp.size = ImVec2(0, 0);
-    vp.isHovered = false;
+    ImGui::Begin("Robot 3D View", NULL, flags);
+    view.pos     = ImGui::GetCursorScreenPos();
+    view.size    = ImGui::GetContentRegionAvail();
+    view.hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
 
-    // ImGui window flags: geen scrollbar, geen background (we tekenen zelf 3D)
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar
-                           | ImGuiWindowFlags_NoScrollWithMouse
-                           | ImGuiWindowFlags_NoBackground;
-
-    ImGui::Begin("Robot 3D View", nullptr, flags);
-    vp.pos = ImGui::GetCursorScreenPos();
-    vp.size = ImGui::GetContentRegionAvail();
-    vp.isHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
-
-    // Voorkom nul-grootte
-    if (vp.size.x < 1 || vp.size.y < 1) {
+    if (view.size.x < 1.0f || view.size.y < 1.0f) {
         ImGui::End();
-        return vp;
+        return view;
     }
 
-    // ── Viewport instellen (scherm-coördinaten → GL viewport) ──
-    // ImGui y=0 is bovenaan, GL y=0 is onderaan
-    float fbHeight = ImGui::GetIO().DisplaySize.y;
-    GLint glX      = (GLint)vp.pos.x;
-    GLint glY      = (GLint)(fbHeight - vp.pos.y - vp.size.y);
-    GLint glW      = (GLint)vp.size.x;
-    GLint glH      = (GLint)vp.size.y;
+    /* ImGui reports screen coordinates with Y down; GL wants framebuffer
+     * pixels with Y up. DisplayFramebufferScale bridges the two on HiDPI. */
+    const ImGuiIO &io = ImGui::GetIO();
+    const GLint gl_x = (GLint)(view.pos.x * io.DisplayFramebufferScale.x);
+    const GLint gl_y = (GLint)((io.DisplaySize.y - view.pos.y - view.size.y) * io.DisplayFramebufferScale.y);
+    const GLint gl_w = (GLint)(view.size.x * io.DisplayFramebufferScale.x);
+    const GLint gl_h = (GLint)(view.size.y * io.DisplayFramebufferScale.y);
 
-    glViewport(glX, glY, glW, glH);
-    glScissor(glX, glY, glW, glH);
+    glViewport(gl_x, gl_y, gl_w, gl_h);
+    glScissor(gl_x, gl_y, gl_w, gl_h);
     glEnable(GL_SCISSOR_TEST);
 
-    // Clear deze viewport regio (zowel kleur als depth)
-    glClearColor(0.09f, 0.10f, 0.13f, 1.0f);
+    glClearColor(s_viewport_clear[0], s_viewport_clear[1], s_viewport_clear[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    // ── Projection ──
-    float aspect = vp.size.x / vp.size.y;
-    Matrix4f proj = perspectiveMatrix(45.0f, aspect, 0.1f, 100.0f);
+    const Matrix4f projection = rbt_perspective(s_fov_deg, view.size.x / view.size.y, s_z_near, s_z_far);
+    const Matrix4f camera_view = rbt_camera_view(&s_camera);
 
-    // ── View ──
-    Matrix4f view = gCamera.getViewMatrix();
-    Vector3f eyePos = gCamera.getEyePosition();
+    rbt_shader_set_frame(&s_shader, camera_view, projection, rbt_camera_eye(&s_camera), s_light_pos);
 
-    // ── Shader instellen ──
-    glUseProgram(gShaderProgram);
-    GLuint loc;
+    glPolygonMode(GL_FRONT_AND_BACK, s_wireframe ? GL_LINE : GL_FILL);
 
-    loc = glGetUniformLocation(gShaderProgram, "uLightPos");
-    if (loc >= 0) glUniform3f(loc, 5.0f, 8.0f, 5.0f);
-    loc = glGetUniformLocation(gShaderProgram, "uViewPos");
-    if (loc >= 0) glUniform3f(loc, eyePos.x(), eyePos.y(), eyePos.z());
-
-    // Wireframe?
-    if (gWireframe) {
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-    } else {
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    if (s_show_grid) {
+        /* A hair below the floor plane: the pedestal stands at exactly y = 0,
+         * and coplanar geometry z-fights. */
+        rbt_shader_set_object(&s_shader, rbt_translation(0.0f, -0.002f, 0.0f), s_grid_color);
+        rbt_mesh_draw(&s_grid);
     }
 
-    // ── Grid tekenen ──
-    if (gShowGrid) {
-        Matrix4f gridModel = Matrix4f::Identity();
-        setUniforms(gShaderProgram, gridModel, view, proj, 0.25f, 0.25f, 0.28f);
-        gGridMesh.draw();
-    }
+    rbt_robot_draw(&s_robot, &s_shader);
 
-    // ── Robot tekenen ──
-    gRobot.drawAll(gShaderProgram, view, proj);
-
-    // Wireframe terugzetten
+    /* Leave GL as ImGui's backend expects to find it. */
+    rbt_mesh_unbind();
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
     glDisable(GL_SCISSOR_TEST);
 
-    // ── Overlay info ──
-    ImGui::SetCursorPos(ImVec2(10, 10));
-    ImGui::TextColored(ImVec4(0.7f, 0.8f, 1.0f, 0.8f),
-                       "LMB: Rotate | RMB: Pan | Scroll: Zoom");
+    ImGui::SetCursorPos(ImVec2(10.0f, 10.0f));
+    ImGui::TextColored(ImVec4(0.7f, 0.8f, 1.0f, 0.8f), "LMB: orbit | RMB: pan | scroll: zoom");
 
     ImGui::End();
-
-    return vp;
+    return view;
 }
 
-// ============================================================
-// Control Panel UI (rechterkant)
-// ============================================================
+/** @brief Joint sliders, display options and a small readout. */
+static void s_draw_control_panel(void)
+{
+    const ImGuiIO &io = ImGui::GetIO();
 
-static void renderControlPanel() {
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 320, 0),
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - (float)s_control_panel_width - 10.0f, 0.0f),
                             ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(310, ImGui::GetIO().DisplaySize.y),
+    ImGui::SetNextWindowSize(ImVec2((float)s_control_panel_width, io.DisplaySize.y),
                              ImGuiCond_FirstUseEver);
 
-    ImGui::Begin("Joint Controls", nullptr, 0);
+    ImGui::Begin("Joint Controls", NULL, 0);
 
-    // ── Robot controls ──
     if (ImGui::CollapsingHeader("Robot", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::Button("Reset All Joints")) {
-            gRobot.resetAllJoints();
+            rbt_robot_reset_joints(&s_robot);
         }
         ImGui::SameLine();
         if (ImGui::Button("Reset Camera")) {
-            gCamera.reset();
+            rbt_camera_reset(&s_camera);
         }
     }
-
-    // ── Joint sliders ──
-    auto joints = gRobot.getAllJoints();
 
     if (ImGui::CollapsingHeader("Joints", ImGuiTreeNodeFlags_DefaultOpen)) {
-        for (size_t i = 0; i < joints.size(); i++) {
-            auto* j = joints[i];
+        for (size_t i = 0; i < s_robot.joints.size(); i++) {
+            rbt_joint_t *joint = s_robot.joints[i];
 
-            // Kleur indicator
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                ImVec4(j->color[0], j->color[1], j->color[2], 1.0f));
-
-            // As label
-            const char* axisLabel = "?";
-            switch (j->axis) {
-                case Axis::X: axisLabel = "X"; break;
-                case Axis::Y: axisLabel = "Y"; break;
-                case Axis::Z: axisLabel = "Z"; break;
-            }
-
-            // Header
+            ImGui::PushID((int)i);
             ImGui::Separator();
-            ImGui::Text("%s [%s]", j->name.c_str(), axisLabel);
 
-            ImGui::PopStyleColor();
+            ImGui::TextColored(ImVec4(joint->color[0], joint->color[1], joint->color[2], 1.0f),
+                               "%s [%s]", joint->name, rbt_axis_label(joint->axis));
 
-            // Slider (graden)
-            float angle = j->currentAngle;
-            if (ImGui::SliderFloat(
-                    ("##angle" + std::to_string(i)).c_str(),
-                    &angle, j->minAngle, j->maxAngle, "%.1f°")) {
-                j->currentAngle = angle;
-            }
-
-            // Reset deze joint
+            ImGui::SliderFloat("##angle", &joint->angle_deg,
+                               joint->min_angle_deg, joint->max_angle_deg, "%.1f deg");
             ImGui::SameLine();
-            if (ImGui::SmallButton(("R##" + std::to_string(i)).c_str())) {
-                j->currentAngle = j->defaultAngle;
+            if (ImGui::SmallButton("R")) {
+                joint->angle_deg = joint->default_angle_deg;
             }
+            ImGui::PopID();
         }
     }
 
-    // ── Display settings ──
     if (ImGui::CollapsingHeader("Display")) {
-        ImGui::Checkbox("Show Grid", &gShowGrid);
-        ImGui::Checkbox("Wireframe", &gWireframe);
+        ImGui::Checkbox("Show Grid", &s_show_grid);
+        ImGui::Checkbox("Wireframe", &s_wireframe);
 
         ImGui::Separator();
         ImGui::Text("Camera");
-        ImGui::SliderFloat("Distance", &gCamera.distance, 2.0f, 20.0f);
-        ImGui::SliderFloat("Yaw",      &gCamera.yaw,    -180.0f, 180.0f);
-        ImGui::SliderFloat("Pitch",    &gCamera.pitch,  -89.0f, 89.0f);
+        ImGui::SliderFloat("Distance", &s_camera.distance, 2.0f, 20.0f);
+        ImGui::SliderFloat("Yaw", &s_camera.yaw_deg, -180.0f, 180.0f);
+        ImGui::SliderFloat("Pitch", &s_camera.pitch_deg, -89.0f, 89.0f);
     }
 
-    // ── Info ──
     if (ImGui::CollapsingHeader("Info")) {
-        ImGui::Text("Robot: 6-DOF manipulator");
-        ImGui::Text("Links: Base → Shoulder → Elbow");
-        ImGui::Text("       → Wrist Pitch → Roll → Tool");
+        ImGui::Text("6-DOF manipulator, %zu joints", s_robot.joints.size());
         ImGui::Separator();
-        ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+        ImGui::Text("%.1f FPS (%.2f ms)", io.Framerate, 1000.0f / io.Framerate);
     }
 
     ImGui::End();
 }
 
-// ============================================================
-// GLFW callbacks
-// ============================================================
+/* ============================================================
+ * Main
+ * ============================================================ */
 
-static GLFWwindow* gWindow = nullptr;
-
-static void glfwErrorCallback(int error, const char* description) {
-    std::cerr << "GLFW Error " << error << ": " << description << std::endl;
-}
-
-// ============================================================
-// Main
-// ============================================================
-
-int main(int argc, char** argv) {
-    // ── GLFW init ──
-    glfwSetErrorCallback(glfwErrorCallback);
-    if (!glfwInit()) {
-        std::cerr << "glfwInit failed!" << std::endl;
+int main(void)
+{
+    glfwSetErrorCallback(s_glfw_error);
+    if (glfwInit() == GLFW_FALSE) {
+        fprintf(stderr, "glfw: init failed\n");
         return 1;
     }
 
-    // OpenGL 3.3 Core Profile
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_SAMPLES, 4); // 4x MSAA
+    glfwWindowHint(GLFW_SAMPLES, 4);
 
-    // Window
-    int w = 1280, h = 800;
-    GLFWwindow* window = glfwCreateWindow(w, h, "Robot Viewer — ImGui", nullptr, nullptr);
-    if (!window) {
-        std::cerr << "glfwCreateWindow failed!" << std::endl;
+    GLFWwindow *window = glfwCreateWindow(1280, 800, "Robot Viewer", NULL, NULL);
+    if (window == NULL) {
+        fprintf(stderr, "glfw: could not create a window or an OpenGL 3.3 context\n");
         glfwTerminate();
         return 1;
     }
-    gWindow = window;
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1); // VSync
+    glfwSwapInterval(1);
 
-    // ── OpenGL context is al actief (via GLFW) ──
-    // GL functies worden geladen door ImGui's built-in loader
-
-    // ── ImGui setup ──
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
 
-    // Donkere theme met wat aanpassingen
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding    = 4.0f;
-    style.FrameRounding     = 3.0f;
-    style.GrabRounding      = 2.0f;
+    ImGuiStyle &style = ImGui::GetStyle();
+    style.WindowRounding = 4.0f;
+    style.FrameRounding  = 3.0f;
+    style.GrabRounding   = 2.0f;
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.11f, 0.14f, 1.00f);
 
-    // Platform & Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
-    // Nu zijn alle GL functies geladen — we kunnen ze veilig gebruiken
-    std::cout << "OpenGL: " << glGetString(GL_VERSION) << std::endl;
+    printf("OpenGL %s on %s\n", glGetString(GL_VERSION), glGetString(GL_RENDERER));
 
-    // ── OpenGL init ──
-    initOpenGL();
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_MULTISAMPLE);
 
-    // ── Main loop ──
-    while (!glfwWindowShouldClose(window)) {
+    if (!rbt_shader_build(&s_shader, s_vertex_shader, s_fragment_shader)) {
+        fprintf(stderr, "fatal: scene shader did not build\n");
+        return 1;
+    }
+
+    rbt_camera_reset(&s_camera);
+    rbt_robot_build(&s_robot);
+    rbt_robot_upload_meshes(&s_robot);
+
+    s_grid = rbt_mesh_make_grid(s_grid_size, s_grid_divisions);
+    rbt_mesh_upload(&s_grid);
+
+    while (glfwWindowShouldClose(window) == GLFW_FALSE) {
         glfwPollEvents();
 
-        // ── ImGui NewFrame ──
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // ── Framebuffer clear (VOORDAT we iets tekenen) ──
-        int displayW, displayH;
-        glfwGetFramebufferSize(window, &displayW, &displayH);
-        glViewport(0, 0, displayW, displayH);
-        glClearColor(0.12f, 0.13f, 0.16f, 1.0f);
+        int framebuffer_w = 0;
+        int framebuffer_h = 0;
+        glfwGetFramebufferSize(window, &framebuffer_w, &framebuffer_h);
+        glViewport(0, 0, framebuffer_w, framebuffer_h);
+        glClearColor(s_window_clear[0], s_window_clear[1], s_window_clear[2], 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // ── Camera input ──
-        // We checken of de muis over het 3D viewport hangt
-        // (wordt bepaald in render3DViewport, dus doen we het na de eerste frame)
+        rbt_robot_update_fk(&s_robot);
+        const rbt_viewport_t view = s_draw_viewport();
 
-        // ── Update forward kinematics ──
-        gRobot.updateAllFK();
+        /* Fed every frame, hovered or not, so an ongoing drag sees the button
+         * come up even when the pointer left the viewport. */
+        const ImGuiIO &io = ImGui::GetIO();
+        const rbt_camera_input_t camera_input = {
+            io.MousePos.x,
+            io.MousePos.y,
+            io.MouseWheel,
+            ImGui::IsMouseDown(ImGuiMouseButton_Left),
+            ImGui::IsMouseDown(ImGuiMouseButton_Right),
+            view.hovered,
+        };
+        rbt_camera_input(&s_camera, &camera_input);
 
-        // ── Render 3D viewport ──
-        ViewportInfo vp = render3DViewport();
+        s_draw_control_panel();
 
-        // ── Camera input (na viewport, zodat we isHovered weten) ──
-        if (vp.isHovered) {
-            ImVec2 m = ImGui::GetMousePos();
-            bool leftDown  = ImGui::IsMouseDown(ImGuiMouseButton_Left);
-            bool rightDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
-            float wheel = ImGui::GetIO().MouseWheel;
-
-            gCamera.handleInput(m.x, m.y, leftDown, rightDown, wheel);
-        }
-
-        // ── Render control panel ──
-        renderControlPanel();
-
-        // ── ImGui Render (geen clear meer — framebuffer is al gecleerd) ──
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
     }
 
-    // ── Cleanup ──
+    rbt_shader_destroy(&s_shader);
+
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
     glfwDestroyWindow(window);
     glfwTerminate();
-
     return 0;
 }

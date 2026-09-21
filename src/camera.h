@@ -1,102 +1,51 @@
-// ============================================================
-// camera.h — Orbit camera voor ImGui/OpenGL (Eigen-based, geen glm)
-// ============================================================
+/**
+ * @file camera.h
+ * @brief Orbit camera: yaw/pitch/distance around a target point.
+ */
+
 #pragma once
 
-#include "gl_utils.h"
-#include <algorithm>
+#include "gl_math.h"
 
-class OrbitCamera {
-public:
-    float distance  = 8.0f;
-    float yaw       = 45.0f;   // graden
-    float pitch     = 25.0f;   // graden
-    Vector3f target = {0.0f, 1.5f, 0.0f};
+/** @brief Camera state. Angles are in degrees; pitch is clamped to avoid gimbal flip. */
+typedef struct {
+    float    distance;   /**< Distance from target to eye, in world units. */
+    float    yaw_deg;    /**< Rotation about +Y. */
+    float    pitch_deg;  /**< Elevation, clamped to (-90, 90). */
+    Vector3f target;     /**< Point the camera looks at. */
 
-    // Muis state
-    bool isDragging = false;
-    bool isPanning  = false;
-    float lastMouseX = 0.0f;
-    float lastMouseY = 0.0f;
+    /* Drag state. A drag starts only over the viewport but continues until
+     * the button is released, wherever the pointer goes. */
+    bool  orbiting;      /**< An orbit drag is in progress. */
+    bool  panning;       /**< A pan drag is in progress. */
+    float last_mouse_x;  /**< Pointer X at the previous input step. */
+    float last_mouse_y;  /**< Pointer Y at the previous input step. */
+} rbt_camera_t;
 
-    // Snelheid
-    float rotateSpeed = 0.4f;
-    float panSpeed    = 0.01f;
-    float zoomSpeed   = 0.8f;
+/** @brief One frame of pointer input, in screen pixels. */
+typedef struct {
+    float mouse_x;
+    float mouse_y;
+    float wheel;       /**< Scroll delta this frame; positive zooms in. */
+    bool  orbit_down;  /**< Orbit button (left) is held. */
+    bool  pan_down;    /**< Pan button (right) is held. */
+    bool  over_view;   /**< Pointer is over the 3D viewport. */
+} rbt_camera_input_t;
 
-    /// Bereken view matrix
-    Matrix4f getViewMatrix() const {
-        Vector3f eye = getEyePosition();
-        return lookAtMatrix(eye, target, Vector3f(0, 1, 0));
-    }
+/** @brief Restore the default framing. */
+void rbt_camera_reset(rbt_camera_t *camera);
 
-    /// Camera positie in world space
-    Vector3f getEyePosition() const {
-        float yawRad   = yaw   * (float)M_PI / 180.0f;
-        float pitchRad = pitch * (float)M_PI / 180.0f;
+/** @brief Eye position in world space, derived from yaw, pitch and distance. */
+Vector3f rbt_camera_eye(const rbt_camera_t *camera);
 
-        Vector3f eye;
-        eye.x() = target.x() + distance * std::cos(pitchRad) * std::sin(yawRad);
-        eye.y() = target.y() + distance * std::sin(pitchRad);
-        eye.z() = target.z() + distance * std::cos(pitchRad) * std::cos(yawRad);
-        return eye;
-    }
+/** @brief View matrix for the current state. */
+Matrix4f rbt_camera_view(const rbt_camera_t *camera);
 
-    /// Handelt muis input af
-    void handleInput(float mouseX, float mouseY, bool leftDown, bool rightDown, float wheel) {
-        // Zoom
-        if (wheel != 0.0f) {
-            distance -= wheel * zoomSpeed;
-            distance = std::clamp(distance, 1.0f, 50.0f);
-        }
-
-        // Rotatie (linker muis knop)
-        if (leftDown && !isPanning) {
-            if (!isDragging) {
-                isDragging = true;
-                lastMouseX = mouseX;
-                lastMouseY = mouseY;
-            } else {
-                float dx = mouseX - lastMouseX;
-                float dy = mouseY - lastMouseY;
-                yaw   -= dx * rotateSpeed;
-                pitch += dy * rotateSpeed;
-                pitch = std::clamp(pitch, -89.0f, 89.0f);
-                lastMouseX = mouseX;
-                lastMouseY = mouseY;
-            }
-        } else {
-            isDragging = false;
-        }
-
-        // Pan (rechter muis knop)
-        if (rightDown && !isDragging) {
-            if (!isPanning) {
-                isPanning = true;
-                lastMouseX = mouseX;
-                lastMouseY = mouseY;
-            } else {
-                float dx = mouseX - lastMouseX;
-                float dy = mouseY - lastMouseY;
-
-                float yawRad = yaw * (float)M_PI / 180.0f;
-                Vector3f right = Vector3f(std::cos(yawRad), 0, -std::sin(yawRad)).normalized();
-                Vector3f up(0, 1, 0);
-
-                target -= right * dx * panSpeed * distance * 0.1f;
-                target += up    * dy * panSpeed * distance * 0.1f;
-                lastMouseX = mouseX;
-                lastMouseY = mouseY;
-            }
-        } else {
-            isPanning = false;
-        }
-    }
-
-    void reset() {
-        distance = 8.0f;
-        yaw      = 45.0f;
-        pitch    = 25.0f;
-        target   = {0.0f, 1.5f, 0.0f};
-    }
-};
+/**
+ * @brief Fold one frame of pointer input into the camera state.
+ *
+ * Must be called every frame, including frames where the pointer is not over
+ * the viewport: that is how a drag notices the button was released elsewhere.
+ * Starting a drag and zooming both require @ref rbt_camera_input_t::over_view.
+ */
+void rbt_camera_input(rbt_camera_t *camera, const rbt_camera_input_t *input);
