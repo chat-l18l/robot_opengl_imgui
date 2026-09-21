@@ -64,9 +64,13 @@ That path is fixed rather than relative to the working directory, so starting
 from the source tree and from `build/` give the same layout. Delete the file to
 get the default arrangement back.
 
-Multi-viewport (panels as separate OS windows) is deliberately off: the 3D
-scene is drawn into the main window's framebuffer under a scissor rectangle,
-which a panel in its own OS window could not share.
+The scene renders into its own framebuffer and reaches the panel as a texture,
+so it is an ordinary entry in ImGui's draw list. That is what lets it stay
+visible while the panel floats over another one, or over the dock space's empty
+central node, both of which paint over the default framebuffer.
+
+Multi-viewport (panels as separate OS windows) is left off, but nothing in the
+render path stands in the way of enabling it now.
 
 ## Layout
 
@@ -77,6 +81,7 @@ src/
 ├── gl_math.h     — projection, view and transform matrices (Eigen)
 ├── gl_shader.*   — program building, uniform locations cached at link time
 ├── gl_mesh.*     — VAO/VBO ownership and the primitive generators
+├── gl_target.*   — offscreen framebuffer the scene renders into
 ├── camera.*      — orbit camera
 └── robot.*       — joint table, forward kinematics, arm rendering
 ```
@@ -92,3 +97,6 @@ src/
   a parent index in the spec instead.
 - **Loading a model:** add TinyGLTF and feed its meshes into `rbt_mesh_t` in
   place of the generated primitives.
+- **Antialiasing:** `s_scene_samples` in `src/main.cpp` sets the scene's sample
+  count. Set it to 1 to switch multisampling off, which is worth trying on a
+  software rasteriser such as llvmpipe, where every sample costs CPU time.

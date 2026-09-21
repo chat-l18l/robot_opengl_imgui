@@ -5,13 +5,12 @@
  * The panels live in an ImGui dock space, so they can be resized, tabbed or
  * torn loose and the arrangement survives a restart.
  *
- * The 3D scene is rendered straight into the default framebuffer under a
- * scissor rectangle matching the viewport panel's content region, before
- * ImGui's draw data is submitted, so the UI composites over it. That works
- * inside a dock node because ImGuiWindowFlags_NoBackground suppresses both the
- * window background and the dock node's fallback fill, leaving the scene
- * visible. It is also why multi-viewport is deliberately left off: a panel
- * dragged into its own OS window would no longer share this framebuffer.
+ * The 3D scene renders into its own framebuffer and reaches the panel as a
+ * texture, so it is an ordinary entry in ImGui's draw list and composites in
+ * draw order like any other widget. That is what keeps it visible when the
+ * panel floats above another one or above the dock space's empty central node,
+ * both of which paint over the default framebuffer after the scene would have
+ * been drawn into it.
  *
  * Dependencies: Eigen3, GLFW3, OpenGL 3.3+, Dear ImGui docking branch.
  */
@@ -22,6 +21,7 @@
 #include "gl_math.h"
 #include "gl_mesh.h"
 #include "gl_shader.h"
+#include "gl_target.h"
 #include "robot.h"
 
 #include <imgui.h>
@@ -134,6 +134,12 @@ static const float s_z_far          = 100.0f;
 static const float s_control_panel_fraction = 0.24f;
 /** Inset of the hint text from the viewport's top-left corner, in pixels. */
 static const float s_overlay_margin = 10.0f;
+/**
+ * Multisampling for the scene. 1 turns it off, which is worth doing on a
+ * software rasteriser: this machine reports llvmpipe, where every extra
+ * sample is CPU work rather than free silicon.
+ */
+static const GLint s_scene_samples = 4;
 
 /* Window titles are the keys the dock layout is stored under; changing one
  * silently drops that panel out of an existing saved layout. */
@@ -152,6 +158,7 @@ static rbt_shader_t s_shader;
 static rbt_robot_t  s_robot;
 static rbt_camera_t s_camera;
 static rbt_mesh_t   s_grid;
+static rbt_target_t s_target;
 
 static bool s_show_grid = true;
 static bool s_wireframe = false;
@@ -334,10 +341,7 @@ static void s_glfw_error(int error, const char *description)
 }
 
 /**
- * @brief Draw the 3D scene inside its panel.
- *
- * The panel has no background of its own; the GL scissor rectangle is what
- * confines the scene to its content region.
+ * @brief Render the scene into its texture and place that texture in the panel.
  *
  * @return The panel's geometry and pointer state, for routing camera input.
  */
@@ -368,17 +372,18 @@ static rbt_viewport_t s_draw_viewport(void)
     view.hovered = ImGui::IsItemHovered();
     view.active  = ImGui::IsItemActive();
 
-    /* ImGui reports screen coordinates with Y down; GL wants framebuffer
-     * pixels with Y up. DisplayFramebufferScale bridges the two on HiDPI. */
+    /* The panel is measured in ImGui's screen coordinates; the texture is
+     * allocated in framebuffer pixels, which differ on a HiDPI display. */
     const ImGuiIO &io = ImGui::GetIO();
-    const GLint gl_x = (GLint)(view.pos.x * io.DisplayFramebufferScale.x);
-    const GLint gl_y = (GLint)((io.DisplaySize.y - view.pos.y - view.size.y) * io.DisplayFramebufferScale.y);
-    const GLint gl_w = (GLint)(view.size.x * io.DisplayFramebufferScale.x);
-    const GLint gl_h = (GLint)(view.size.y * io.DisplayFramebufferScale.y);
+    const GLsizei pixel_w = (GLsizei)(view.size.x * io.DisplayFramebufferScale.x);
+    const GLsizei pixel_h = (GLsizei)(view.size.y * io.DisplayFramebufferScale.y);
 
-    glViewport(gl_x, gl_y, gl_w, gl_h);
-    glScissor(gl_x, gl_y, gl_w, gl_h);
-    glEnable(GL_SCISSOR_TEST);
+    if (!rbt_target_resize(&s_target, pixel_w, pixel_h, s_scene_samples)) {
+        ImGui::End();
+        return view;
+    }
+
+    rbt_target_begin(&s_target);
 
     glClearColor(s_viewport_clear[0], s_viewport_clear[1], s_viewport_clear[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -402,7 +407,16 @@ static rbt_viewport_t s_draw_viewport(void)
     /* Leave GL as ImGui's backend expects to find it. */
     rbt_mesh_unbind();
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    glDisable(GL_SCISSOR_TEST);
+    rbt_target_end(&s_target);
+
+    /* Straight into the window's draw list rather than through ImGui::Image,
+     * so the image does not become a second item competing with the button
+     * above for the pointer. V is flipped because GL textures start at the
+     * bottom row. */
+    ImGui::GetWindowDrawList()->AddImage((ImTextureID)s_target.texture,
+                                         view.pos,
+                                         ImVec2(view.pos.x + view.size.x, view.pos.y + view.size.y),
+                                         ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
 
     /* Screen coordinates, not window coordinates: SetCursorPos is measured
      * from the panel origin including its title bar, which put this text
@@ -486,7 +500,8 @@ int main(void)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_SAMPLES, 4);
+    /* No GLFW_SAMPLES: the default framebuffer carries only UI, which ImGui
+     * antialiases itself. The scene is multisampled in its own target. */
 
     GLFWwindow *window = glfwCreateWindow(1280, 800, "Robot Viewer", NULL, NULL);
     if (window == NULL) {
@@ -575,6 +590,7 @@ int main(void)
         glfwSwapBuffers(window);
     }
 
+    rbt_target_destroy(&s_target);
     rbt_shader_destroy(&s_shader);
 
     ImGui_ImplOpenGL3_Shutdown();
