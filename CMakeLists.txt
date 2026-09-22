@@ -29,6 +29,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLFW REQUIRED glfw3)
 pkg_check_modules(GL REQUIRED gl)
 pkg_check_modules(EIGEN REQUIRED eigen3)
+find_package(ZLIB REQUIRED)   # PNG encoding for --shot
 
 # ============================================================
 # ImGui (fetched from GitHub)
@@ -68,6 +69,7 @@ add_executable(robot_viewer
     src/gl_target.cpp
     src/ui_layout.cpp
     src/robot.cpp
+    src/screenshot.cpp
 )
 target_include_directories(robot_viewer PRIVATE src)
 target_include_directories(robot_viewer SYSTEM PRIVATE
@@ -80,6 +82,7 @@ target_compile_options(robot_viewer PRIVATE
 )
 target_link_libraries(robot_viewer PRIVATE
     imgui
+    ZLIB::ZLIB
     ${GLFW_LIBRARIES}
     ${GL_LIBRARIES}
     dl

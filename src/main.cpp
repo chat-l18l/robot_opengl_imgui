@@ -23,6 +23,7 @@
 #include "gl_shader.h"
 #include "gl_target.h"
 #include "robot.h"
+#include "screenshot.h"
 #include "ui_layout.h"
 
 #include <imgui.h>
@@ -252,6 +253,157 @@ static const char *s_resolve_layout_path(void)
 }
 
 /* ============================================================
+ * Command line
+ * ============================================================ */
+
+/** @brief Options. Capturing is off unless --shot is given. */
+typedef struct {
+    const char *shot_path;      /**< PNG to write, NULL to run interactively. */
+    const char *pose;           /**< Comma-separated joint angles in degrees. */
+    int         width;
+    int         height;
+    int         warmup_frames;  /**< Frames to settle before capturing. */
+    float       yaw_deg;
+    float       pitch_deg;
+    float       distance;
+    bool        has_camera;     /**< A camera override was given. */
+    bool        crop_to_view;   /**< Capture the 3D view alone, without panels. */
+} rbt_options_t;
+
+/** Enough frames for the dock layout to be built and then applied. */
+static const int s_default_warmup = 6;
+
+static void s_print_usage(const char *program)
+{
+    fprintf(stderr,
+            "usage: %s [options]\n"
+            "\n"
+            "  --shot FILE      render one frame to a PNG and exit\n"
+            "  --size WxH       window size (default 1280x800)\n"
+            "  --view YAW,PITCH,DISTANCE   camera placement, degrees and units\n"
+            "  --pose A,B,C,... joint angles in degrees, in panel order\n"
+            "  --bare           capture the 3D view only, without the panels\n"
+            "  --warmup N       frames to settle before capturing (default %d)\n"
+            "  --help           this message\n"
+            "\n"
+            "With no options the viewer runs normally.\n",
+            program, s_default_warmup);
+}
+
+/** @brief Parse "WxH". */
+static bool s_parse_size(const char *text, int *width, int *height)
+{
+    char *end = NULL;
+    const long w = strtol(text, &end, 10);
+    if (end == text || *end != 'x') {
+        return false;
+    }
+    const char *rest = end + 1;
+    const long h = strtol(rest, &end, 10);
+    if (end == rest || *end != '\0' || w < 1 || h < 1) {
+        return false;
+    }
+    *width  = (int)w;
+    *height = (int)h;
+    return true;
+}
+
+/** @brief Parse "YAW,PITCH,DISTANCE". */
+static bool s_parse_view(const char *text, rbt_options_t *options)
+{
+    char *end = NULL;
+    options->yaw_deg = strtof(text, &end);
+    if (end == text || *end != ',') {
+        return false;
+    }
+    const char *rest = end + 1;
+    options->pitch_deg = strtof(rest, &end);
+    if (end == rest || *end != ',') {
+        return false;
+    }
+    rest = end + 1;
+    options->distance = strtof(rest, &end);
+    if (end == rest || *end != '\0') {
+        return false;
+    }
+    options->has_camera = true;
+    return true;
+}
+
+/**
+ * @brief Read the command line.
+ *
+ * @param help_requested Set when the caller asked for usage, which is not an
+ *                       error and should exit successfully.
+ * @return false when an option was unknown or malformed.
+ */
+static bool s_parse_options(rbt_options_t *options, int argc, char **argv, bool *help_requested)
+{
+    *help_requested = false;
+
+    for (int i = 1; i < argc; i++) {
+        const char *arg  = argv[i];
+        const bool has_value = (i + 1) < argc;
+
+        if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
+            s_print_usage(argv[0]);
+            *help_requested = true;
+            return true;
+        } else if (strcmp(arg, "--bare") == 0) {
+            options->crop_to_view = true;
+        } else if (strcmp(arg, "--shot") == 0 && has_value) {
+            options->shot_path = argv[++i];
+        } else if (strcmp(arg, "--pose") == 0 && has_value) {
+            options->pose = argv[++i];
+        } else if (strcmp(arg, "--warmup") == 0 && has_value) {
+            options->warmup_frames = (int)strtol(argv[++i], NULL, 10);
+        } else if (strcmp(arg, "--size") == 0 && has_value) {
+            if (!s_parse_size(argv[++i], &options->width, &options->height)) {
+                fprintf(stderr, "bad --size, expected WxH\n");
+                return false;
+            }
+        } else if (strcmp(arg, "--view") == 0 && has_value) {
+            if (!s_parse_view(argv[++i], options)) {
+                fprintf(stderr, "bad --view, expected YAW,PITCH,DISTANCE\n");
+                return false;
+            }
+        } else {
+            fprintf(stderr, "unknown or incomplete option: %s\n\n", arg);
+            s_print_usage(argv[0]);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** @brief Apply comma-separated angles to the joints, clamped to their limits. */
+static void s_apply_pose(const char *text)
+{
+    assert(text != NULL);
+
+    const char *cursor = text;
+    for (size_t i = 0; i < s_robot.joints.size() && *cursor != '\0'; i++) {
+        char *end = NULL;
+        const float degrees = strtof(cursor, &end);
+        if (end == cursor) {
+            break;
+        }
+
+        rbt_joint_t *joint = s_robot.joints[i];
+        float angle = degrees;
+        if (angle < joint->min_angle_deg) {
+            angle = joint->min_angle_deg;
+        }
+        if (angle > joint->max_angle_deg) {
+            angle = joint->max_angle_deg;
+        }
+        joint->angle_deg = angle;
+
+        cursor = (*end == ',') ? end + 1 : end;
+    }
+}
+
+/* ============================================================
  * Rendering
  * ============================================================ */
 
@@ -390,8 +542,18 @@ static void s_draw_control_panel(void)
  * Main
  * ============================================================ */
 
-int main(void)
+int main(int argc, char **argv)
 {
+    rbt_options_t options = {NULL, NULL, 1280, 800, s_default_warmup, 0.0f, 0.0f, 0.0f, false, false};
+    bool help_requested = false;
+    if (!s_parse_options(&options, argc, argv, &help_requested)) {
+        return 1;
+    }
+    if (help_requested) {
+        return 0;
+    }
+    const bool capturing = options.shot_path != NULL;
+
     glfwSetErrorCallback(s_glfw_error);
     if (glfwInit() == GLFW_FALSE) {
         fprintf(stderr, "glfw: init failed\n");
@@ -403,8 +565,11 @@ int main(void)
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     /* No GLFW_SAMPLES: the default framebuffer carries only UI, which ImGui
      * antialiases itself. The scene is multisampled in its own target. */
+    if (capturing) {
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    }
 
-    GLFWwindow *window = glfwCreateWindow(1280, 800, "Robot Viewer", NULL, NULL);
+    GLFWwindow *window = glfwCreateWindow(options.width, options.height, "Robot Viewer", NULL, NULL);
     if (window == NULL) {
         fprintf(stderr, "glfw: could not create a window or an OpenGL 3.3 context\n");
         glfwTerminate();
@@ -421,7 +586,9 @@ int main(void)
     rbt_ui_configure_io();
     /* Multi-viewport stays off: a panel in its own OS window would not share
      * the framebuffer the scene is rendered into. */
-    io.IniFilename = s_resolve_layout_path();
+    /* A capture must not depend on how the user happens to have arranged the
+     * panels, so it starts from the built-in layout every time. */
+    io.IniFilename = capturing ? NULL : s_resolve_layout_path();
 
     ImGui::StyleColorsDark();
 
@@ -446,11 +613,23 @@ int main(void)
     }
 
     rbt_camera_reset(&s_camera);
+    if (options.has_camera) {
+        s_camera.yaw_deg   = options.yaw_deg;
+        s_camera.pitch_deg = options.pitch_deg;
+        s_camera.distance  = options.distance;
+    }
+
     rbt_robot_build(&s_robot);
     rbt_robot_upload_meshes(&s_robot);
+    if (options.pose != NULL) {
+        s_apply_pose(options.pose);
+    }
 
     s_grid = rbt_mesh_make_grid(s_grid_size, s_grid_divisions);
     rbt_mesh_upload(&s_grid);
+
+    int frame_index = 0;
+    int exit_code = 0;
 
     while (glfwWindowShouldClose(window) == GLFW_FALSE) {
         glfwPollEvents();
@@ -479,6 +658,29 @@ int main(void)
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
+        frame_index++;
+        if (capturing && frame_index >= options.warmup_frames) {
+            /* The back buffer holds the finished frame; reading it before the
+             * swap avoids depending on what the window system keeps in front. */
+            GLint   crop_x = 0;
+            GLint   crop_y = 0;
+            GLsizei crop_w = (GLsizei)framebuffer_w;
+            GLsizei crop_h = (GLsizei)framebuffer_h;
+
+            if (options.crop_to_view && view.visible) {
+                crop_x = (GLint)(view.pos.x * io.DisplayFramebufferScale.x);
+                crop_y = (GLint)((io.DisplaySize.y - view.pos.y - view.size.y) * io.DisplayFramebufferScale.y);
+                crop_w = (GLsizei)(view.size.x * io.DisplayFramebufferScale.x);
+                crop_h = (GLsizei)(view.size.y * io.DisplayFramebufferScale.y);
+            }
+
+            glReadBuffer(GL_BACK);
+            if (!rbt_screenshot_capture(options.shot_path, crop_x, crop_y, crop_w, crop_h)) {
+                exit_code = 1;
+            }
+            break;
+        }
+
         glfwSwapBuffers(window);
     }
 
@@ -490,5 +692,5 @@ int main(void)
     ImGui::DestroyContext();
     glfwDestroyWindow(window);
     glfwTerminate();
-    return 0;
+    return exit_code;
 }

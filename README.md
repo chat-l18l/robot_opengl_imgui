@@ -1,39 +1,27 @@
-# ImGui Robot Viewer — 6-DOF Robot Arm
+# ImGui Robot Viewer
 
-A single-window C++ application that renders a 6-DOF robot arm in an ImGui
-viewport with OpenGL 3.3. Every joint is driven from a slider.
+A 6-DOF robot arm you can pose from sliders, in a single C++ window.
+OpenGL 3.3, Dear ImGui, Eigen — and deliberately not much else.
 
-Few dependencies on purpose: no glad, no glm, no scene graph library. On Linux
-`libGL.so` already exports the GL 3.3 core entry points, Eigen covers the
-matrix math, and the arm is a joint table rather than a model file.
+![The viewer](docs/images/viewer.png)
 
-## Dependencies (Ubuntu/Debian)
+| | | |
+|:-:|:-:|:-:|
+| ![Close on the wrist](docs/images/arm-close.png) | ![From behind](docs/images/arm-side.png) | ![Reaching out](docs/images/arm-reach.png) |
+| Close on the wrist | From behind | Reaching across the grid |
 
-```bash
-sudo apt install cmake g++ libglfw3-dev libeigen3-dev mesa-common-dev
-```
-
-## Build
+## Try it
 
 ```bash
+sudo apt install cmake g++ libglfw3-dev libeigen3-dev mesa-common-dev zlib1g-dev
 cmake -S . -B build && cmake --build build -j$(nproc)
-```
-
-The first configure downloads Dear ImGui through FetchContent, pinned to
-`v1.91.8-docking` because the panels use a dock space. The build type
-defaults to `Release`; Eigen without an optimiser is an order of magnitude
-slower, so an unset build type is worth avoiding. For a debug build with the
-asserts active:
-
-```bash
-cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug && cmake --build build-debug -j$(nproc)
-```
-
-## Run
-
-```bash
 ./build/robot_viewer
 ```
+
+The first configure fetches Dear ImGui (`v1.91.8-docking`). Everything else
+comes from the system. The build defaults to `Release`, because Eigen without
+an optimiser is an order of magnitude slower; `-DCMAKE_BUILD_TYPE=Debug` turns
+the asserts on.
 
 ## Controls
 
@@ -46,50 +34,19 @@ cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug && cmake --build build-debug 
 | Reset one joint | `R` next to its slider |
 | Reset everything | "Reset All Joints" |
 
-A drag starts only over the 3D viewport, but continues until the button is
-released, wherever the pointer goes. The viewport claims the pointer while it
-is over it, so dragging inside it orbits rather than moving the panel.
+The 3D view owns the pointer while you are over it, so dragging inside it
+orbits. Panels move by their title bar or tab, never by their body — otherwise
+grabbing the middle of a floating panel to move it would turn the arm instead.
 
-Panels therefore move by their title bar or tab, never by their body. ImGui
-allows a body drag by default, which over the 3D view competes with orbiting:
-grabbing the middle of a floating panel to move it turned the arm instead. Drop
-`io.ConfigWindowsMoveFromTitleBarOnly` in `src/main.cpp` to get the default
-back.
+Both panels live in a dock space, so you can re-dock, split or tear one loose.
+The arrangement is remembered in `$XDG_CONFIG_HOME/robot_viewer/imgui.ini`;
+delete that file to get the default back.
 
-## Tests
+## What is in it
 
-There is one host-side test, covering how pointer input is split between the
-camera and the panels. It needs no window and no GL context.
-
-```bash
-ctest --test-dir build --output-on-failure
-```
-
-See `tests/ui_input/README.md` for what it checks.
-
-## Panels
-
-Both panels live in a dock space: drag a tab to re-dock, split or tear one
-loose. The first run lays the 3D view out on the left and the controls on the
-right; after that the arrangement is restored from
-
-```
-$XDG_CONFIG_HOME/robot_viewer/imgui.ini    # or ~/.config/robot_viewer/imgui.ini
-```
-
-That path is fixed rather than relative to the working directory, so starting
-from the source tree and from `build/` give the same layout. Delete the file to
-get the default arrangement back.
-
-The scene renders into its own framebuffer and reaches the panel as a texture,
-so it is an ordinary entry in ImGui's draw list. That is what lets it stay
-visible while the panel floats over another one, or over the dock space's empty
-central node, both of which paint over the default framebuffer.
-
-Multi-viewport (panels as separate OS windows) is left off, but nothing in the
-render path stands in the way of enabling it now.
-
-## Layout
+No glad, no glm, no scene graph. On Linux `libGL.so` already exports the GL 3.3
+core entry points, Eigen covers the matrix math, and the arm is a table of
+joints rather than a model file.
 
 ```
 src/
@@ -101,20 +58,53 @@ src/
 ├── gl_target.*   — offscreen framebuffer the scene renders into
 ├── camera.*      — orbit camera
 ├── ui_layout.*   — dock space and the viewport panel's pointer handling
+├── screenshot.*  — framebuffer readback and a small PNG encoder
 └── robot.*       — joint table, forward kinematics, arm rendering
 ```
 
-## Extending
+The scene renders into its own framebuffer and reaches the panel as a texture,
+so it is an ordinary entry in ImGui's draw list rather than something painted
+underneath it. That is what keeps it visible when a panel floats over another
+one.
 
-- **Different arm:** edit `s_arm_chain` in `src/robot.cpp`. One row per joint:
-  axis, travel limits, offset from the parent, link radius, colour. The link
-  length is the Y component of the offset, so there is only one place to
-  change it.
-- **More joints:** add rows. The builder wires each row as the child of the
-  previous one and asserts that the chain stays a chain; a branching arm needs
-  a parent index in the spec instead.
-- **Loading a model:** add TinyGLTF and feed its meshes into `rbt_mesh_t` in
+## Making it your own
+
+- **A different arm** — edit `s_arm_chain` in `src/robot.cpp`. One row per
+  joint: axis, travel limits, offset from the parent, link radius, colour. The
+  link length is the Y component of the offset, so there is one place to change
+  it. Add rows for more joints; the builder chains each to the previous one and
+  asserts the chain stays a chain, so a branching arm wants a parent index in
+  the spec instead.
+- **A real model** — add TinyGLTF and feed its meshes into `rbt_mesh_t` in
   place of the generated primitives.
-- **Antialiasing:** `s_scene_samples` in `src/main.cpp` sets the scene's sample
-  count. Set it to 1 to switch multisampling off, which is worth trying on a
-  software rasteriser such as llvmpipe, where every sample costs CPU time.
+- **Antialiasing** — `s_scene_samples` in `src/main.cpp`. Set it to 1 to switch
+  multisampling off, worth trying on a software rasteriser such as llvmpipe
+  where every sample costs CPU time.
+
+## Tests
+
+One host-side test, covering how pointer input is split between the camera and
+the panels. No window, no GL context, a few milliseconds.
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+See [tests/ui_input/README.md](tests/ui_input/README.md) for what it checks.
+
+## Screenshots
+
+The viewer can photograph itself, so the images above are reproducible:
+
+```bash
+tools/make-screenshots.sh
+```
+
+Each one is a single `--shot` run with a camera and a pose:
+
+```bash
+./build/robot_viewer --shot out.png --size 1280x800 \
+                     --view 40,18,4.6 --pose 0,0,25,-70,-35,0,0
+```
+
+`--bare` captures the 3D view without the panels; `--help` lists the rest.
