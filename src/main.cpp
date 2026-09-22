@@ -26,6 +26,7 @@
 #include "robot.h"
 #include "screenshot.h"
 #include "ui_layout.h"
+#include "urdf_load.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -39,6 +40,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 
 /* ============================================================
@@ -274,7 +276,8 @@ static const char *s_resolve_layout_path(void)
 /** @brief Options. Capturing is off unless --shot is given. */
 typedef struct {
     const char *shot_path;      /**< PNG to write, NULL to run interactively. */
-    const char *model_path;     /**< glTF file to show instead of the built-in arm. */
+    const char *model_path;     /**< URDF or glTF file to show instead of the built-in arm. */
+    bool        honor_up_axis;  /**< Turn COLLADA meshes by their declared up axis. */
     const char *pose;           /**< Comma-separated joint angles in degrees. */
     int         width;
     int         height;
@@ -296,7 +299,10 @@ static void s_print_usage(const char *program)
     fprintf(stderr,
             "usage: %s [options]\n"
             "\n"
-            "  --model FILE     show a glTF 2.0 model (.gltf or .glb) instead of the built-in arm\n"
+            "  --model FILE     show a URDF robot (.urdf) or a glTF 2.0 model (.gltf, .glb)\n"
+            "                   instead of the built-in arm\n"
+            "  --honor-up-axis  turn a URDF's COLLADA meshes by the up axis they declare,\n"
+            "                   as Gazebo does; iCub needs it. Ignored by default, as RViz does\n"
             "  --shot FILE      render one frame to a PNG and exit\n"
             "  --size WxH       window size (default 1280x800)\n"
             "  --view YAW,PITCH,DISTANCE   camera placement, degrees and units\n"
@@ -368,6 +374,8 @@ static bool s_parse_options(rbt_options_t *options, int argc, char **argv, bool 
             return true;
         } else if (strcmp(arg, "--bare") == 0) {
             options->crop_to_view = true;
+        } else if (strcmp(arg, "--honor-up-axis") == 0) {
+            options->honor_up_axis = true;
         } else if (strcmp(arg, "--model") == 0 && has_value) {
             options->model_path = argv[++i];
         } else if (strcmp(arg, "--shot") == 0 && has_value) {
@@ -627,6 +635,21 @@ static void s_draw_control_panel(void)
  * Main
  * ============================================================ */
 
+/** @brief True when @p path ends in @p suffix, ignoring case. */
+static bool s_has_suffix(const char *path, const char *suffix)
+{
+    const size_t path_len   = strlen(path);
+    const size_t suffix_len = strlen(suffix);
+    return path_len >= suffix_len && strcasecmp(path + path_len - suffix_len, suffix) == 0;
+}
+
+/** @brief Load a model with the loader its extension calls for. */
+static bool s_load_model(rbt_robot_t *robot, const char *path, bool honor_up_axis)
+{
+    return s_has_suffix(path, ".urdf") ? rbt_urdf_load(robot, path, honor_up_axis)
+                                       : rbt_gltf_load(robot, path);
+}
+
 /**
  * @brief Frame a loaded model and scale the light rig and the grid to it.
  *
@@ -727,7 +750,7 @@ int main(int argc, char **argv)
     rbt_camera_reset(&s_camera);
 
     if (options.model_path != NULL) {
-        if (!rbt_gltf_load(&s_robot, options.model_path)) {
+        if (!s_load_model(&s_robot, options.model_path, options.honor_up_axis)) {
             return 1;
         }
         int movable = 0;

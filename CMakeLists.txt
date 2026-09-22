@@ -30,6 +30,11 @@ pkg_check_modules(GLFW REQUIRED glfw3)
 pkg_check_modules(GL REQUIRED gl)
 pkg_check_modules(EIGEN REQUIRED eigen3)
 find_package(ZLIB REQUIRED)   # PNG encoding for --shot
+pkg_check_modules(TINYXML2 REQUIRED tinyxml2)   # URDF parsing
+# The meshes URDFs point at: COLLADA, STL, OBJ. Through assimp's own CMake
+# package rather than pkg-config: the assimp.pc that conda-forge ships leaks
+# CMake generator keywords into its link line, which only links by accident.
+find_package(assimp CONFIG REQUIRED)
 
 # ============================================================
 # ImGui (fetched from GitHub)
@@ -83,6 +88,8 @@ add_executable(robot_viewer
     src/gl_shader.cpp
     src/gl_target.cpp
     src/gltf_load.cpp
+    src/mesh_import.cpp
+    src/urdf_load.cpp
     src/ui_layout.cpp
     src/robot.cpp
     src/screenshot.cpp
@@ -90,6 +97,7 @@ add_executable(robot_viewer
 target_include_directories(robot_viewer PRIVATE src)
 target_include_directories(robot_viewer SYSTEM PRIVATE
     ${cgltf_SOURCE_DIR}
+    ${TINYXML2_INCLUDE_DIRS}
     ${EIGEN_INCLUDE_DIRS}
     ${GLFW_INCLUDE_DIRS}
     ${GL_INCLUDE_DIRS}
@@ -100,6 +108,8 @@ target_compile_options(robot_viewer PRIVATE
 target_link_libraries(robot_viewer PRIVATE
     imgui
     ZLIB::ZLIB
+    ${TINYXML2_LINK_LIBRARIES}
+    assimp::assimp
     ${GLFW_LIBRARIES}
     ${GL_LIBRARIES}
     dl
