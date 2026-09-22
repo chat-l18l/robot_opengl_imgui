@@ -6,6 +6,7 @@
 #include "robot.h"
 
 #include <assert.h>
+#include <stddef.h>
 
 /* ============================================================
  * Arm definition
@@ -20,13 +21,15 @@
  *   Wrist Roll    Y
  *   Tool          X  — carries the gripper
  *
- * The chain is data, not code: one table and one loop, so adding or
- * retuning a joint is a single line and no reference juggling.
+ * The arm is data, not code: one table and one loop. Each row names its
+ * parent by index, so a second arm hanging off the same shoulder is another
+ * row rather than another data structure.
  * ============================================================ */
 
-/** @brief Declarative description of one joint in the chain. */
+/** @brief Declarative description of one joint. */
 typedef struct {
     const char *name;
+    int         parent;         /**< Row index of the parent, or RBT_NO_PARENT. */
     rbt_axis_t  axis;
     float       min_angle_deg;
     float       max_angle_deg;
@@ -48,18 +51,18 @@ static const int s_cylinder_segments = 24;
 static const int s_sphere_rings      = 16;
 static const int s_sphere_segments   = 24;
 
-static const rbt_joint_spec_t s_arm_chain[] = {
-    /* name              axis          min     max     default  offset (x, y, z)         radius  color (r, g, b)       */
-    {"Base",             RBT_AXIS_Y, -180.0f, 180.0f,    0.0f, {0.0f, 0.00f, 0.0f}, 0.180f, {0.45f, 0.45f, 0.45f}},
-    {"Shoulder Pan",     RBT_AXIS_Y, -180.0f, 180.0f,    0.0f, {0.0f, 0.25f, 0.0f}, 0.100f, {0.85f, 0.35f, 0.15f}},
-    {"Shoulder Lift",    RBT_AXIS_Z,  -90.0f, 120.0f,    0.0f, {0.0f, 0.25f, 0.0f}, 0.080f, {0.20f, 0.55f, 0.90f}},
-    {"Elbow",            RBT_AXIS_Z, -135.0f, 135.0f,  -45.0f, {0.0f, 1.20f, 0.0f}, 0.070f, {0.20f, 0.70f, 0.40f}},
-    {"Wrist Pitch",      RBT_AXIS_Z, -180.0f, 180.0f,    0.0f, {0.0f, 1.00f, 0.0f}, 0.055f, {0.80f, 0.75f, 0.15f}},
-    {"Wrist Roll",       RBT_AXIS_Y, -180.0f, 180.0f,    0.0f, {0.0f, 0.30f, 0.0f}, 0.040f, {0.70f, 0.30f, 0.70f}},
-    {"Tool",             RBT_AXIS_X, -180.0f, 180.0f,    0.0f, {0.0f, 0.15f, 0.0f}, 0.035f, {0.90f, 0.90f, 0.20f}},
+static const rbt_joint_spec_t s_arm_joints[] = {
+    /* name             parent          axis          min     max     default  offset (x, y, z)     radius  color (r, g, b)      */
+    {"Base",            RBT_NO_PARENT, RBT_AXIS_Y, -180.0f, 180.0f,    0.0f, {0.0f, 0.00f, 0.0f}, 0.180f, {0.45f, 0.45f, 0.45f}},
+    {"Shoulder Pan",                0, RBT_AXIS_Y, -180.0f, 180.0f,    0.0f, {0.0f, 0.25f, 0.0f}, 0.100f, {0.85f, 0.35f, 0.15f}},
+    {"Shoulder Lift",               1, RBT_AXIS_Z,  -90.0f, 120.0f,    0.0f, {0.0f, 0.25f, 0.0f}, 0.080f, {0.20f, 0.55f, 0.90f}},
+    {"Elbow",                       2, RBT_AXIS_Z, -135.0f, 135.0f,  -45.0f, {0.0f, 1.20f, 0.0f}, 0.070f, {0.20f, 0.70f, 0.40f}},
+    {"Wrist Pitch",                 3, RBT_AXIS_Z, -180.0f, 180.0f,    0.0f, {0.0f, 1.00f, 0.0f}, 0.055f, {0.80f, 0.75f, 0.15f}},
+    {"Wrist Roll",                  4, RBT_AXIS_Y, -180.0f, 180.0f,    0.0f, {0.0f, 0.30f, 0.0f}, 0.040f, {0.70f, 0.30f, 0.70f}},
+    {"Tool",                        5, RBT_AXIS_X, -180.0f, 180.0f,    0.0f, {0.0f, 0.15f, 0.0f}, 0.035f, {0.90f, 0.90f, 0.20f}},
 };
 
-static const size_t s_arm_chain_count = sizeof(s_arm_chain) / sizeof(s_arm_chain[0]);
+static const size_t s_arm_joint_count = sizeof(s_arm_joints) / sizeof(s_arm_joints[0]);
 
 /** @brief Copy a spec into a joint. */
 static void s_joint_from_spec(rbt_joint_t *joint, const rbt_joint_spec_t *spec)
@@ -69,6 +72,8 @@ static void s_joint_from_spec(rbt_joint_t *joint, const rbt_joint_spec_t *spec)
 
     joint->name              = spec->name;
     joint->axis              = spec->axis;
+    joint->parent            = spec->parent;
+    joint->child_count       = 0;
     joint->min_angle_deg     = spec->min_angle_deg;
     joint->max_angle_deg     = spec->max_angle_deg;
     joint->default_angle_deg = spec->default_angle_deg;
@@ -81,42 +86,31 @@ static void s_joint_from_spec(rbt_joint_t *joint, const rbt_joint_spec_t *spec)
     joint->world_transform   = Matrix4f::Identity();
 }
 
-/** @brief Append every joint under @p joint to @p out, depth first, parents before children. */
-static void s_collect_joints(rbt_joint_t *joint, std::vector<rbt_joint_t *> *out)
-{
-    assert(joint != NULL);
-    assert(out != NULL);
-
-    out->push_back(joint);
-    for (rbt_joint_t &child : joint->children) {
-        s_collect_joints(&child, out);
-    }
-}
-
 void rbt_robot_build(rbt_robot_t *robot)
 {
     assert(robot != NULL);
+    assert(s_arm_joint_count > 0);
+    assert(s_arm_joints[0].parent == RBT_NO_PARENT);
 
-    s_joint_from_spec(&robot->base, &s_arm_chain[0]);
-    robot->base.children.clear();
+    robot->joints.clear();
+    robot->joints.resize(s_arm_joint_count);
 
-    rbt_joint_t *parent = &robot->base;
-    for (size_t i = 1; i < s_arm_chain_count; i++) {
-        /* The table describes a single chain. Appending a second child would
-         * invalidate `parent`, so the invariant is checked rather than assumed;
-         * a branching arm needs a parent index in the spec, not this loop. */
-        assert(parent->children.empty());
+    for (size_t i = 0; i < s_arm_joint_count; i++) {
+        const rbt_joint_spec_t *spec = &s_arm_joints[i];
 
-        parent->children.emplace_back();
-        s_joint_from_spec(&parent->children.back(), &s_arm_chain[i]);
-        parent = &parent->children.back();
+        /* A parent must already exist. That single rule is what lets forward
+         * kinematics and drawing run as one forward pass over the array. */
+        assert(spec->parent == RBT_NO_PARENT
+               || (spec->parent >= 0 && (size_t)spec->parent < i));
+
+        s_joint_from_spec(&robot->joints[i], spec);
     }
 
-    /* Valid from here on because the tree is never modified again. */
-    robot->joints.clear();
-    robot->joints.reserve(s_arm_chain_count);
-    s_collect_joints(&robot->base, &robot->joints);
-    assert(robot->joints.size() == s_arm_chain_count);
+    for (const rbt_joint_t &joint : robot->joints) {
+        if (joint.parent != RBT_NO_PARENT) {
+            robot->joints[(size_t)joint.parent].child_count++;
+        }
+    }
 
     robot->cylinder = rbt_mesh_make_cylinder(1.0f, 1.0f, 1.0f, s_cylinder_segments);
     robot->sphere   = rbt_mesh_make_sphere(1.0f, s_sphere_rings, s_sphere_segments);
@@ -136,8 +130,8 @@ void rbt_robot_reset_joints(rbt_robot_t *robot)
 {
     assert(robot != NULL);
 
-    for (rbt_joint_t *joint : robot->joints) {
-        joint->angle_deg = joint->default_angle_deg;
+    for (rbt_joint_t &joint : robot->joints) {
+        joint.angle_deg = joint.default_angle_deg;
     }
 }
 
@@ -156,29 +150,27 @@ static Matrix4f s_joint_rotation(const rbt_joint_t *joint)
     return Matrix4f::Identity();
 }
 
-/** @brief Propagate the parent transform down the subtree at @p joint. */
-static void s_update_fk(rbt_joint_t *joint, const Matrix4f &parent_transform)
-{
-    assert(joint != NULL);
-
-    joint->world_transform = parent_transform
-                           * rbt_translation(joint->offset.x(), joint->offset.y(), joint->offset.z())
-                           * s_joint_rotation(joint);
-
-    for (rbt_joint_t &child : joint->children) {
-        s_update_fk(&child, joint->world_transform);
-    }
-}
-
 void rbt_robot_update_fk(rbt_robot_t *robot)
 {
     assert(robot != NULL);
 
-    s_update_fk(&robot->base, Matrix4f::Identity());
+    for (size_t i = 0; i < robot->joints.size(); i++) {
+        rbt_joint_t &joint = robot->joints[i];
+
+        const Matrix4f local =
+            rbt_translation(joint.offset.x(), joint.offset.y(), joint.offset.z())
+            * s_joint_rotation(&joint);
+
+        /* The parent is earlier in the array, so its transform is already the
+         * one for this frame. */
+        joint.world_transform = (joint.parent == RBT_NO_PARENT)
+                              ? local
+                              : robot->joints[(size_t)joint.parent].world_transform * local;
+    }
 }
 
 /**
- * @brief Draw the gripper at the tip of a leaf joint.
+ * @brief Draw the gripper at the tip of a joint that carries no children.
  *
  * Geometry is expressed in the joint's own frame: a palm block at the flange
  * with two fingers reaching along +Y.
@@ -201,58 +193,51 @@ static void s_draw_gripper(const rbt_robot_t *robot, const rbt_shader_t *shader,
     rbt_mesh_draw(&robot->box);
 }
 
-/**
- * @brief Draw the links leaving @p joint, then recurse.
- *
- * A link is the unit cylinder stretched from this joint's origin to the child's
- * offset, so it always spans exactly the distance forward kinematics uses. The
- * marker sphere carries the child's own colour, matching the UI's colour key.
- */
-static void s_draw_joint(const rbt_robot_t *robot, const rbt_shader_t *shader, const rbt_joint_t *joint)
-{
-    assert(joint != NULL);
-
-    for (const rbt_joint_t &child : joint->children) {
-        const float length = child.offset.y();
-        const float radius = child.link_radius;
-
-        rbt_shader_set_object(shader,
-                              joint->world_transform * rbt_scale(radius, length, radius),
-                              joint->color);
-        rbt_mesh_draw(&robot->cylinder);
-
-        const float marker = radius * s_joint_marker_scale;
-        rbt_shader_set_object(shader,
-                              joint->world_transform
-                                  * rbt_translation(0.0f, length, 0.0f)
-                                  * rbt_scale(marker, marker, marker),
-                              child.color);
-        rbt_mesh_draw(&robot->sphere);
-
-        s_draw_joint(robot, shader, &child);
-    }
-
-    if (joint->children.empty()) {
-        s_draw_gripper(robot, shader, joint->world_transform);
-    }
-}
-
 void rbt_robot_draw(const rbt_robot_t *robot, const rbt_shader_t *shader)
 {
     assert(robot != NULL);
     assert(shader != NULL);
+    assert(!robot->joints.empty());
+    assert(robot->joints[0].parent == RBT_NO_PARENT);
 
     /* Pedestal: a property of the machine, not of any joint, so it is drawn
-     * here instead of being special-cased inside the tree walk. The unit
-     * cylinder already spans y = 0..1, so scaling alone stands it on the
-     * floor; translating first would lift it clear of the grid. */
+     * here rather than being special-cased inside the walk. The unit cylinder
+     * already spans y = 0..1, so scaling alone stands it on the floor. */
+    const rbt_joint_t &root = robot->joints[0];
     rbt_shader_set_object(shader,
-                          robot->base.world_transform
+                          root.world_transform
                               * rbt_scale(s_pedestal_radius, s_pedestal_height, s_pedestal_radius),
-                          robot->base.color);
+                          root.color);
     rbt_mesh_draw(&robot->cylinder);
 
-    s_draw_joint(robot, shader, &robot->base);
+    for (const rbt_joint_t &joint : robot->joints) {
+        if (joint.parent != RBT_NO_PARENT) {
+            /* The link is the unit cylinder stretched from the parent's origin
+             * to this joint's offset, so it always spans exactly the distance
+             * forward kinematics uses. The marker sphere carries this joint's
+             * own colour, matching the panel's colour key. */
+            const rbt_joint_t &parent = robot->joints[(size_t)joint.parent];
+            const float length = joint.offset.y();
+            const float radius = joint.link_radius;
+
+            rbt_shader_set_object(shader,
+                                  parent.world_transform * rbt_scale(radius, length, radius),
+                                  parent.color);
+            rbt_mesh_draw(&robot->cylinder);
+
+            const float marker = radius * s_joint_marker_scale;
+            rbt_shader_set_object(shader,
+                                  parent.world_transform
+                                      * rbt_translation(0.0f, length, 0.0f)
+                                      * rbt_scale(marker, marker, marker),
+                                  joint.color);
+            rbt_mesh_draw(&robot->sphere);
+        }
+
+        if (joint.child_count == 0) {
+            s_draw_gripper(robot, shader, joint.world_transform);
+        }
+    }
 }
 
 const char *rbt_axis_label(rbt_axis_t axis)

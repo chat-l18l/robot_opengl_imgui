@@ -1,6 +1,6 @@
 /**
  * @file robot.h
- * @brief Robot arm: joint tree, forward kinematics and rendering.
+ * @brief Robot arm: joint array, forward kinematics and rendering.
  */
 
 #pragma once
@@ -17,36 +17,46 @@ typedef enum {
     RBT_AXIS_Z,
 } rbt_axis_t;
 
+/** @brief Parent index of a joint that has none. Only the root carries it. */
+#define RBT_NO_PARENT (-1)
+
 /**
  * @brief One revolute joint and the link that reaches it from its parent.
+ *
+ * Joints live in one flat array and name their parent by index, the usual
+ * representation in robotics. A parent always sits earlier in the array, so
+ * forward kinematics is a single forward pass: no recursion, no pointers to
+ * keep valid, and the whole chain walks contiguous memory.
  *
  * The link is not stored separately: its length is the Y component of
  * @ref offset, so there is exactly one place that says how long it is.
  */
-typedef struct rbt_joint_t {
+typedef struct {
     const char *name;             /**< Static string; joints do not own their name. */
     rbt_axis_t  axis;             /**< Rotation axis. */
+    int         parent;           /**< Index of the parent joint, or RBT_NO_PARENT. */
+    int         child_count;      /**< Filled by rbt_robot_build; 0 marks a tool tip. */
+
     float       min_angle_deg;    /**< Lower travel limit. */
     float       max_angle_deg;    /**< Upper travel limit. */
     float       default_angle_deg;/**< Pose restored by rbt_robot_reset_joints. */
     float       angle_deg;        /**< Live angle, driven by the UI. */
+
     Vector3f    offset;           /**< Parent joint to this joint, in the parent frame. */
     float       link_radius;      /**< Radius of the link drawn along that offset. */
-    float       color[3];         /**< RGB in 0..1, used for the link and the joint marker. */
+    float       color[3];         /**< RGB in 0..1, for the link and the joint marker. */
 
     Matrix4f    world_transform;  /**< Written by rbt_robot_update_fk. */
-    std::vector<rbt_joint_t> children;
 } rbt_joint_t;
 
 /**
- * @brief The arm: its joint tree, a flat view of it, and the shared primitives.
+ * @brief The arm: its joints and the primitives they are drawn with.
  *
- * @ref joints points into @ref base. The tree must not be modified after
- * rbt_robot_build, or those pointers dangle.
+ * The topology is fixed once rbt_robot_build has run. @ref rbt_joint_t::parent
+ * and @ref rbt_joint_t::child_count describe it, and nothing recomputes them.
  */
 typedef struct {
-    rbt_joint_t base;                 /**< Root of the kinematic tree. */
-    std::vector<rbt_joint_t *> joints;/**< Depth-first view, built once for the UI. */
+    std::vector<rbt_joint_t> joints;  /**< Root first; every parent precedes its children. */
 
     rbt_mesh_t cylinder;              /**< Unit cylinder: radius 1, height 1, along +Y. */
     rbt_mesh_t sphere;                /**< Unit sphere: radius 1. */
@@ -54,10 +64,11 @@ typedef struct {
 } rbt_robot_t;
 
 /**
- * @brief Build the joint tree and generate the primitive meshes on the CPU.
+ * @brief Build the joint array and generate the primitive meshes on the CPU.
  *
  * No GL calls happen here, so this may run before a context exists.
- * Post: every joint sits at its default angle and @ref rbt_robot_t::joints is valid.
+ * Post: every joint sits at its default angle, and parent and child counts
+ * describe the arm.
  */
 void rbt_robot_build(rbt_robot_t *robot);
 

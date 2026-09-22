@@ -400,15 +400,15 @@ static void s_apply_pose(const char *text)
             break;
         }
 
-        rbt_joint_t *joint = s_robot.joints[i];
+        rbt_joint_t &joint = s_robot.joints[i];
         float angle = degrees;
-        if (angle < joint->min_angle_deg) {
-            angle = joint->min_angle_deg;
+        if (angle < joint.min_angle_deg) {
+            angle = joint.min_angle_deg;
         }
-        if (angle > joint->max_angle_deg) {
-            angle = joint->max_angle_deg;
+        if (angle > joint.max_angle_deg) {
+            angle = joint.max_angle_deg;
         }
-        joint->angle_deg = angle;
+        joint.angle_deg = angle;
 
         cursor = (*end == ',') ? end + 1 : end;
     }
@@ -511,19 +511,19 @@ static void s_draw_control_panel(void)
 
     if (ImGui::CollapsingHeader("Joints", ImGuiTreeNodeFlags_DefaultOpen)) {
         for (size_t i = 0; i < s_robot.joints.size(); i++) {
-            rbt_joint_t *joint = s_robot.joints[i];
+            rbt_joint_t &joint = s_robot.joints[i];
 
             ImGui::PushID((int)i);
             ImGui::Separator();
 
-            ImGui::TextColored(ImVec4(joint->color[0], joint->color[1], joint->color[2], 1.0f),
-                               "%s [%s]", joint->name, rbt_axis_label(joint->axis));
+            ImGui::TextColored(ImVec4(joint.color[0], joint.color[1], joint.color[2], 1.0f),
+                               "%s [%s]", joint.name, rbt_axis_label(joint.axis));
 
-            ImGui::SliderFloat("##angle", &joint->angle_deg,
-                               joint->min_angle_deg, joint->max_angle_deg, "%.1f deg");
+            ImGui::SliderFloat("##angle", &joint.angle_deg,
+                               joint.min_angle_deg, joint.max_angle_deg, "%.1f deg");
             ImGui::SameLine();
             if (ImGui::SmallButton("R")) {
-                joint->angle_deg = joint->default_angle_deg;
+                joint.angle_deg = joint.default_angle_deg;
             }
             ImGui::PopID();
         }

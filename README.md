@@ -69,12 +69,13 @@ one.
 
 ## Making it your own
 
-- **A different arm** — edit `s_arm_chain` in `src/robot.cpp`. One row per
-  joint: axis, travel limits, offset from the parent, link radius, colour. The
-  link length is the Y component of the offset, so there is one place to change
-  it. Add rows for more joints; the builder chains each to the previous one and
-  asserts the chain stays a chain, so a branching arm wants a parent index in
-  the spec instead.
+- **A different arm** — edit `s_arm_joints` in `src/robot.cpp`. One row per
+  joint: the parent's row index, axis, travel limits, offset from that parent,
+  link radius, colour. The link length is the Y component of the offset, so
+  there is one place to change it. More joints are more rows, and two rows
+  naming the same parent give you a branch — a second arm off one shoulder
+  needs no new data structure. The only rule is that a parent comes first in
+  the table, which is what makes forward kinematics a single forward pass.
 - **A real model** — add TinyGLTF and feed its meshes into `rbt_mesh_t` in
   place of the generated primitives.
 - **Antialiasing** — `s_scene_samples` in `src/main.cpp`. Set it to 1 to switch
