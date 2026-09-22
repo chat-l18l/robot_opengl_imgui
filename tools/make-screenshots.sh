@@ -1,10 +1,11 @@
 #!/bin/sh
 # Regenerate the images used by README.md.
 #
-# Run from the repository root with the viewer already built:
+# Run through pixi, which builds the viewer first:
 #
-#     cmake --build build -j$(nproc) && tools/make-screenshots.sh
+#     pixi run shots
 #
+# or from the repository root against any existing build in build/.
 # The viewer renders these off-screen from its own built-in layout, so the
 # result does not depend on how the panels happen to be arranged locally.
 set -eu

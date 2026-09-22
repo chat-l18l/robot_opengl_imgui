@@ -2,6 +2,9 @@
 build/
 build-*/
 
+# pixi environments (pixi.lock is tracked; the installed env is not)
+.pixi/
+
 # Runtime state written by Dear ImGui next to the executable
 imgui.ini
 

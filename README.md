@@ -12,16 +12,32 @@ OpenGL 3.3, Dear ImGui, Eigen — and deliberately not much else.
 
 ## Try it
 
+With [pixi](https://pixi.sh) installed, one command fetches the toolchain,
+builds and starts the viewer:
+
+```bash
+pixi run viewer
+```
+
+| Task | What it does |
+|------|--------------|
+| `pixi run viewer` | Build and start the viewer |
+| `pixi run test` | Build and run the tests |
+| `pixi run shots` | Regenerate the images in this README |
+| `pixi run build-debug` | A second build with the asserts on, in `build-debug/` |
+
+`pixi.lock` pins every version, the compiler included, so a checkout builds
+the same thing everywhere. Dear ImGui is the one thing CMake still fetches,
+because its docking branch (`v1.91.8-docking`) is not packaged. The GL driver
+is always the system's own.
+
+Without pixi the CMake project works as it is, given GLFW, Eigen, zlib and the
+GL headers from somewhere else:
+
 ```bash
 sudo apt install cmake g++ libglfw3-dev libeigen3-dev mesa-common-dev zlib1g-dev
 cmake -S . -B build && cmake --build build -j$(nproc)
-./build/robot_viewer
 ```
-
-The first configure fetches Dear ImGui (`v1.91.8-docking`). Everything else
-comes from the system. The build defaults to `Release`, because Eigen without
-an optimiser is an order of magnitude slower; `-DCMAKE_BUILD_TYPE=Debug` turns
-the asserts on.
 
 ## Controls
 
@@ -88,7 +104,7 @@ One host-side test, covering how pointer input is split between the camera and
 the panels. No window, no GL context, a few milliseconds.
 
 ```bash
-ctest --test-dir build --output-on-failure
+pixi run test
 ```
 
 See [tests/ui_input/README.md](tests/ui_input/README.md) for what it checks.
@@ -98,7 +114,7 @@ See [tests/ui_input/README.md](tests/ui_input/README.md) for what it checks.
 The viewer can photograph itself, so the images above are reproducible:
 
 ```bash
-tools/make-screenshots.sh
+pixi run shots
 ```
 
 Each one is a single `--shot` run with a camera and a pose:
