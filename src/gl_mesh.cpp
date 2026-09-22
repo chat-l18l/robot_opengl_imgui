@@ -8,47 +8,56 @@
 #include <assert.h>
 #include <stddef.h>
 
-rbt_mesh_t::~rbt_mesh_t()
+/** @brief Delete whatever GL objects the mesh holds. */
+static void s_release_gl(rbt_mesh_t *mesh)
 {
-    if (vbo != 0) {
-        glDeleteBuffers(1, &vbo);
+    if (mesh->ebo != 0) {
+        glDeleteBuffers(1, &mesh->ebo);
     }
-    if (vao != 0) {
-        glDeleteVertexArrays(1, &vao);
+    if (mesh->vbo != 0) {
+        glDeleteBuffers(1, &mesh->vbo);
+    }
+    if (mesh->vao != 0) {
+        glDeleteVertexArrays(1, &mesh->vao);
     }
 }
 
-rbt_mesh_t::rbt_mesh_t(rbt_mesh_t &&other) noexcept
-    : vertices(std::move(other.vertices)),
-      vao(other.vao),
-      vbo(other.vbo),
-      vertex_count(other.vertex_count)
+/** @brief Move every field from @p src to @p dst and leave @p src owning nothing. */
+static void s_take(rbt_mesh_t *dst, rbt_mesh_t *src)
 {
-    other.vao          = 0;
-    other.vbo          = 0;
-    other.vertex_count = 0;
+    dst->vertices     = std::move(src->vertices);
+    dst->indices      = std::move(src->indices);
+    dst->vao          = src->vao;
+    dst->vbo          = src->vbo;
+    dst->ebo          = src->ebo;
+    dst->vertex_count = src->vertex_count;
+    dst->index_count  = src->index_count;
+    dst->bounds_min   = src->bounds_min;
+    dst->bounds_max   = src->bounds_max;
+
+    src->vao          = 0;
+    src->vbo          = 0;
+    src->ebo          = 0;
+    src->vertex_count = 0;
+    src->index_count  = 0;
+}
+
+rbt_mesh_t::~rbt_mesh_t()
+{
+    s_release_gl(this);
+}
+
+rbt_mesh_t::rbt_mesh_t(rbt_mesh_t &&other) noexcept
+{
+    s_take(this, &other);
 }
 
 rbt_mesh_t &rbt_mesh_t::operator=(rbt_mesh_t &&other) noexcept
 {
-    if (this == &other) {
-        return *this;
+    if (this != &other) {
+        s_release_gl(this);
+        s_take(this, &other);
     }
-    if (vbo != 0) {
-        glDeleteBuffers(1, &vbo);
-    }
-    if (vao != 0) {
-        glDeleteVertexArrays(1, &vao);
-    }
-
-    vertices     = std::move(other.vertices);
-    vao          = other.vao;
-    vbo          = other.vbo;
-    vertex_count = other.vertex_count;
-
-    other.vao          = 0;
-    other.vbo          = 0;
-    other.vertex_count = 0;
     return *this;
 }
 
@@ -60,6 +69,13 @@ void rbt_mesh_upload(rbt_mesh_t *mesh)
         return;
     }
     assert(!mesh->vertices.empty());
+
+    mesh->bounds_min = mesh->vertices[0].position;
+    mesh->bounds_max = mesh->vertices[0].position;
+    for (const rbt_vertex_t &vertex : mesh->vertices) {
+        mesh->bounds_min = mesh->bounds_min.cwiseMin(vertex.position);
+        mesh->bounds_max = mesh->bounds_max.cwiseMax(vertex.position);
+    }
 
     glGenVertexArrays(1, &mesh->vao);
     glGenBuffers(1, &mesh->vbo);
@@ -79,12 +95,24 @@ void rbt_mesh_upload(rbt_mesh_t *mesh)
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE,
                           sizeof(rbt_vertex_t), (void *)offsetof(rbt_vertex_t, normal));
 
+    if (!mesh->indices.empty()) {
+        /* Bound while the VAO is, so the VAO remembers it. */
+        glGenBuffers(1, &mesh->ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     (GLsizeiptr)(mesh->indices.size() * sizeof(uint32_t)),
+                     mesh->indices.data(),
+                     GL_STATIC_DRAW);
+    }
+
     glBindVertexArray(0);
 
     mesh->vertex_count = (GLsizei)mesh->vertices.size();
+    mesh->index_count  = (GLsizei)mesh->indices.size();
 
     /* The geometry now lives on the GPU and is never read back. */
     std::vector<rbt_vertex_t>().swap(mesh->vertices);
+    std::vector<uint32_t>().swap(mesh->indices);
 }
 
 void rbt_mesh_draw(const rbt_mesh_t *mesh)
@@ -93,7 +121,11 @@ void rbt_mesh_draw(const rbt_mesh_t *mesh)
     assert(mesh->vao != 0);
 
     glBindVertexArray(mesh->vao);
-    glDrawArrays(GL_TRIANGLES, 0, mesh->vertex_count);
+    if (mesh->index_count > 0) {
+        glDrawElements(GL_TRIANGLES, mesh->index_count, GL_UNSIGNED_INT, (void *)0);
+    } else {
+        glDrawArrays(GL_TRIANGLES, 0, mesh->vertex_count);
+    }
 }
 
 void rbt_mesh_unbind(void)

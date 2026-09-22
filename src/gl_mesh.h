@@ -8,6 +8,7 @@
 #include "gl_core.h"
 #include "gl_math.h"
 
+#include <stdint.h>
 #include <vector>
 
 /** @brief One vertex: position and normal, both in model space. */
@@ -23,14 +24,22 @@ typedef struct {
  * names, and whichever destructor ran second would delete a buffer the other
  * still believes it owns.
  *
- * The CPU-side vertex vector is released on upload; only @ref vertex_count
- * survives, because nothing here reads geometry back.
+ * Indices are optional: the generated primitives are plain triangle lists,
+ * while loaded models share vertices between triangles and come indexed.
+ *
+ * The CPU-side arrays are released on upload; only the counts and the bounding
+ * box survive, because nothing here reads geometry back.
  */
 struct rbt_mesh_t {
     std::vector<rbt_vertex_t> vertices;  /**< Staging data, empty after upload. */
-    GLuint  vao = 0;                     /**< Vertex array object, 0 until uploaded. */
-    GLuint  vbo = 0;                     /**< Vertex buffer object, 0 until uploaded. */
-    GLsizei vertex_count = 0;            /**< Triangles * 3, valid after upload. */
+    std::vector<uint32_t>     indices;   /**< Staging indices; empty for a plain triangle list. */
+    GLuint   vao = 0;                    /**< Vertex array object, 0 until uploaded. */
+    GLuint   vbo = 0;                    /**< Vertex buffer object, 0 until uploaded. */
+    GLuint   ebo = 0;                    /**< Element buffer object, 0 when not indexed. */
+    GLsizei  vertex_count = 0;           /**< Valid after upload. */
+    GLsizei  index_count = 0;            /**< Valid after upload; 0 draws the vertices in order. */
+    Vector3f bounds_min = Vector3f::Zero();  /**< Model-space box, valid after upload. */
+    Vector3f bounds_max = Vector3f::Zero();
 
     rbt_mesh_t() = default;
     ~rbt_mesh_t();
@@ -43,7 +52,7 @@ struct rbt_mesh_t {
 };
 
 /**
- * @brief Upload the staged vertices and free the CPU copy.
+ * @brief Upload the staged vertices and indices, record the bounds, free the CPU copy.
  *
  * Pre: a GL context is current. Uploading twice is a no-op.
  */
