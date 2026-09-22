@@ -36,5 +36,11 @@ shots = { cmd = "sh tools/make-screenshots.sh", depends-on = ["build"] }
 test-models = "python tools/make-test-models.py"
 fetch-samples = "sh tools/fetch-sample-models.sh"
 
+# Real robots from example-robot-data, by their path under its robots/ directory:
+#     pixi run robot panda_description/urdf/panda.urdf
+robot = { cmd = "./build/robot_viewer --model $CONDA_PREFIX/share/example-robot-data/robots/{{ path }}", args = ["path"], depends-on = ["build"] }
+# Every robot description that can be passed to `pixi run robot`.
+robots = "cd $CONDA_PREFIX/share/example-robot-data/robots && find . -name '*.urdf' | sed 's|^./||' | sort"
+
 # Asserts on, optimiser off, in its own tree so it never disturbs the release build.
 build-debug = "cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$CONDA_PREFIX && cmake --build build-debug"
