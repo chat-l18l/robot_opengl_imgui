@@ -29,6 +29,7 @@ test = { cmd = "ctest --test-dir build --output-on-failure", depends-on = ["buil
 viewer = { cmd = "./build/robot_viewer", depends-on = ["build"] }
 shots = { cmd = "sh tools/make-screenshots.sh", depends-on = ["build"] }
 test-models = "python tools/make-test-models.py"
+fetch-samples = "sh tools/fetch-sample-models.sh"
 
 # Asserts on, optimiser off, in its own tree so it never disturbs the release build.
 build-debug = "cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$CONDA_PREFIX && cmake --build build-debug"

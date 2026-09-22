@@ -2,6 +2,9 @@
 build/
 build-*/
 
+# Third-party models fetched by tools/fetch-sample-models.sh; not redistributed
+models/external/
+
 # pixi environments (pixi.lock is tracked; the installed env is not)
 .pixi/
 
