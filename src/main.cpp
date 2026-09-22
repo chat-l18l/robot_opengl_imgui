@@ -266,7 +266,9 @@ typedef struct {
     float       yaw_deg;
     float       pitch_deg;
     float       distance;
-    bool        has_camera;     /**< A camera override was given. */
+    float       target[3];      /**< Point the camera looks at, in world units. */
+    bool        has_camera;     /**< A camera placement override was given. */
+    bool        has_target;     /**< A look-at override was given. */
     bool        crop_to_view;   /**< Capture the 3D view alone, without panels. */
 } rbt_options_t;
 
@@ -281,6 +283,7 @@ static void s_print_usage(const char *program)
             "  --shot FILE      render one frame to a PNG and exit\n"
             "  --size WxH       window size (default 1280x800)\n"
             "  --view YAW,PITCH,DISTANCE   camera placement, degrees and units\n"
+            "  --target X,Y,Z   point the camera looks at (default 0,1.5,0)\n"
             "  --pose A,B,C,... joint angles in degrees, in panel order\n"
             "  --bare           capture the 3D view only, without the panels\n"
             "  --warmup N       frames to settle before capturing (default %d)\n"
@@ -308,25 +311,22 @@ static bool s_parse_size(const char *text, int *width, int *height)
     return true;
 }
 
-/** @brief Parse "YAW,PITCH,DISTANCE". */
-static bool s_parse_view(const char *text, rbt_options_t *options)
+/** @brief Parse three comma-separated floats, as both --view and --target take. */
+static bool s_parse_triple(const char *text, float out[3])
 {
-    char *end = NULL;
-    options->yaw_deg = strtof(text, &end);
-    if (end == text || *end != ',') {
-        return false;
+    const char *cursor = text;
+    for (int i = 0; i < 3; i++) {
+        char *end = NULL;
+        out[i] = strtof(cursor, &end);
+        if (end == cursor) {
+            return false;
+        }
+        const char expected = (i < 2) ? ',' : '\0';
+        if (*end != expected) {
+            return false;
+        }
+        cursor = end + 1;
     }
-    const char *rest = end + 1;
-    options->pitch_deg = strtof(rest, &end);
-    if (end == rest || *end != ',') {
-        return false;
-    }
-    rest = end + 1;
-    options->distance = strtof(rest, &end);
-    if (end == rest || *end != '\0') {
-        return false;
-    }
-    options->has_camera = true;
     return true;
 }
 
@@ -363,10 +363,21 @@ static bool s_parse_options(rbt_options_t *options, int argc, char **argv, bool 
                 return false;
             }
         } else if (strcmp(arg, "--view") == 0 && has_value) {
-            if (!s_parse_view(argv[++i], options)) {
+            float view[3];
+            if (!s_parse_triple(argv[++i], view)) {
                 fprintf(stderr, "bad --view, expected YAW,PITCH,DISTANCE\n");
                 return false;
             }
+            options->yaw_deg    = view[0];
+            options->pitch_deg  = view[1];
+            options->distance   = view[2];
+            options->has_camera = true;
+        } else if (strcmp(arg, "--target") == 0 && has_value) {
+            if (!s_parse_triple(argv[++i], options->target)) {
+                fprintf(stderr, "bad --target, expected X,Y,Z\n");
+                return false;
+            }
+            options->has_target = true;
         } else {
             fprintf(stderr, "unknown or incomplete option: %s\n\n", arg);
             s_print_usage(argv[0]);
@@ -544,7 +555,8 @@ static void s_draw_control_panel(void)
 
 int main(int argc, char **argv)
 {
-    rbt_options_t options = {NULL, NULL, 1280, 800, s_default_warmup, 0.0f, 0.0f, 0.0f, false, false};
+    rbt_options_t options = {NULL, NULL, 1280, 800, s_default_warmup,
+                             0.0f, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, false, false, false};
     bool help_requested = false;
     if (!s_parse_options(&options, argc, argv, &help_requested)) {
         return 1;
@@ -617,6 +629,9 @@ int main(int argc, char **argv)
         s_camera.yaw_deg   = options.yaw_deg;
         s_camera.pitch_deg = options.pitch_deg;
         s_camera.distance  = options.distance;
+    }
+    if (options.has_target) {
+        s_camera.target = Vector3f(options.target[0], options.target[1], options.target[2]);
     }
 
     rbt_robot_build(&s_robot);

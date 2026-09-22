@@ -103,8 +103,10 @@ tools/make-screenshots.sh
 Each one is a single `--shot` run with a camera and a pose:
 
 ```bash
-./build/robot_viewer --shot out.png --size 1280x800 \
-                     --view 40,18,4.6 --pose 0,0,25,-70,-35,0,0
+./build/robot_viewer --shot out.png --size 1280x800 --view 40,18,4.3 \
+                     --target 0,1.7,0 --pose 0,0,25,-70,-35,0,0
 ```
 
-`--bare` captures the 3D view without the panels; `--help` lists the rest.
+`--view` is yaw, pitch and distance; `--target` is the point it looks at;
+`--pose` is one angle per joint in panel order. `--bare` captures the 3D view
+without the panels, and `--help` lists the rest.
