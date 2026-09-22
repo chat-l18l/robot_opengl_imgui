@@ -31,4 +31,8 @@ mkdir -p "$OUT"
 "$VIEWER" --shot "$OUT/arm-reach.png" --size 900x620 --bare \
           --view 55,16,4.8 --target 0,1.0,0 --pose 0,60,80,-110,-40,0,0
 
+# A loaded glTF model, to show the loader and its joint panel.
+"$VIEWER" --shot "$OUT/model-test-arm.png" --size 1100x620 \
+          --model models/test_arm.glb --pose 35,55,50,25
+
 echo "wrote $OUT/*.png"
