@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<!--
+  One visual whose rpy turns about two axes, so the order the three turns
+  compose in becomes visible: roll 90 then yaw 90 about the fixed axes.
+-->
+<robot name="rpy">
+  <link name="base">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5707963267948966 0 1.5707963267948966"/>
+      <geometry><box size="1 1 1"/></geometry>
+    </visual>
+  </link>
+</robot>

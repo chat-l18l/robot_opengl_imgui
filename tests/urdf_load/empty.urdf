@@ -1,0 +1,3 @@
+<?xml version="1.0"?>
+<!-- A robot with nothing in it, which the loader must refuse. -->
+<robot name="empty"/>

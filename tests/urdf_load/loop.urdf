@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<!-- Every link has a parent, so there is no root: the loader must refuse. -->
+<robot name="loop">
+  <link name="a"><visual><geometry><box size="1 1 1"/></geometry></visual></link>
+  <link name="b"><visual><geometry><box size="1 1 1"/></geometry></visual></link>
+  <joint name="a_to_b" type="fixed"><parent link="a"/><child link="b"/></joint>
+  <joint name="b_to_a" type="fixed"><parent link="b"/><child link="a"/></joint>
+</robot>

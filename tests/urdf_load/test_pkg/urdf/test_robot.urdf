@@ -1,0 +1,88 @@
+<?xml version="1.0"?>
+<!--
+  Test robot for tests/urdf_load. Every number the test checks follows from
+  this file by hand; the derivations are in urdf_load_test.cpp.
+-->
+<robot name="test_robot">
+  <material name="blue">
+    <color rgba="0 0 1 1"/>
+  </material>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+      <geometry><box size="0.4 0.2 0.1"/></geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+  <joint name="yaw" type="continuous">
+    <parent link="base_link"/>
+    <child link="upper"/>
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+
+  <link name="upper">
+    <visual>
+      <geometry><cylinder radius="0.05" length="0.6"/></geometry>
+      <material name="red_inline"><color rgba="1 0 0 1"/></material>
+    </visual>
+  </link>
+
+  <!-- The frame turns a quarter about Y, so rpy is exercised as well. -->
+  <joint name="pitch" type="revolute">
+    <parent link="upper"/>
+    <child link="lower"/>
+    <origin xyz="0 0 0.3" rpy="0 1.5707963267948966 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.0" upper="2.0" effort="1" velocity="1"/>
+  </joint>
+
+  <link name="lower">
+    <!-- STL has no colour, so the URDF material applies. -->
+    <visual>
+      <origin xyz="0 0 0.2"/>
+      <geometry><mesh filename="package://test_pkg/meshes/triangle.stl" scale="2 2 2"/></geometry>
+      <material name="blue"/>
+    </visual>
+    <!-- The COLLADA file brings its own green, which wins over the URDF's blue. -->
+    <visual>
+      <geometry><mesh filename="package://test_pkg/meshes/marker_y_up.dae"/></geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+  <joint name="slide" type="prismatic">
+    <parent link="lower"/>
+    <child link="finger"/>
+    <origin xyz="0 0 0.1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="0.04" effort="1" velocity="1"/>
+  </joint>
+
+  <link name="finger">
+    <visual><geometry><sphere radius="0.02"/></geometry></visual>
+  </link>
+
+  <joint name="follower" type="revolute">
+    <parent link="lower"/>
+    <child link="follower_link"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.5" upper="0.5" effort="1" velocity="1"/>
+    <mimic joint="pitch" multiplier="1"/>
+  </joint>
+
+  <link name="follower_link"/>
+
+  <!--
+  <link name="commented_out">
+    <visual><geometry><box size="1 1 1"/></geometry></visual>
+  </link>
+  -->
+
+  <joint name="broken" type="fixed">
+    <parent link="lower"/>
+    <child link="missing"/>
+  </joint>
+</robot>
