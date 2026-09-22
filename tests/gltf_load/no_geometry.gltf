@@ -1,0 +1,30 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "robot_opengl_imgui tools/make-test-models.py, no geometry"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "root",
+      "children": [
+        1
+      ]
+    },
+    {
+      "name": "child",
+      "translation": [
+        0,
+        1,
+        0
+      ]
+    }
+  ]
+}

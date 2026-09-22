@@ -17,6 +17,8 @@ zlib = ">=1.3,<2"
 # GL headers and the libglvnd dispatcher; the driver itself stays the
 # system's, found at run time.
 libgl-devel = ">=1.7,<2"
+# Only for tools/make-test-models.py, which uses the standard library alone.
+python = "3.12.*"
 
 [tasks]
 # Configure once. After that `cmake --build` reconfigures by itself when a
@@ -26,6 +28,7 @@ build = { cmd = "cmake --build build", depends-on = ["configure"] }
 test = { cmd = "ctest --test-dir build --output-on-failure", depends-on = ["build"] }
 viewer = { cmd = "./build/robot_viewer", depends-on = ["build"] }
 shots = { cmd = "sh tools/make-screenshots.sh", depends-on = ["build"] }
+test-models = "python tools/make-test-models.py"
 
 # Asserts on, optimiser off, in its own tree so it never disturbs the release build.
 build-debug = "cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$CONDA_PREFIX && cmake --build build-debug"

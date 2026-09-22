@@ -1,0 +1,170 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "robot_opengl_imgui tools/make-test-models.py, edge cases"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "root",
+      "mesh": 0,
+      "children": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "name": "swapped",
+      "extras": {
+        "rbt_joint": "revolute",
+        "rbt_min_deg": 90,
+        "rbt_max_deg": -90
+      }
+    },
+    {
+      "name": "zero_axis",
+      "extras": {
+        "rbt_joint": "revolute",
+        "rbt_axis": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "clamped_default",
+      "extras": {
+        "rbt_joint": "revolute",
+        "rbt_min_deg": -10,
+        "rbt_max_deg": 10,
+        "rbt_default_deg": 45
+      }
+    },
+    {
+      "name": "prismatic",
+      "extras": {
+        "rbt_joint": "prismatic"
+      }
+    },
+    {
+      "name": "decoy",
+      "extras": {
+        "label": "rbt_axis",
+        "rbt_joint": "revolute",
+        "rbt_axis": [
+          1,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "defaults",
+      "extras": {
+        "rbt_joint": "revolute"
+      }
+    },
+    {
+      "name": "no_extras"
+    }
+  ],
+  "meshes": [
+    {
+      "name": "triangle",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "indices": 2,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "plain",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.5,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      }
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [
+        0,
+        0,
+        0
+      ],
+      "max": [
+        1,
+        1,
+        0
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 3,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 36,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 36,
+      "byteLength": 36,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 72,
+      "byteLength": 6,
+      "target": 34963
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 78,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIA"
+    }
+  ]
+}
