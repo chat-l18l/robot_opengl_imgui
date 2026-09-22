@@ -424,6 +424,35 @@ static void s_glfw_error(int error, const char *description)
 }
 
 /**
+ * @brief Initialise GLFW, preferring X11 where GLFW would otherwise pick Wayland.
+ *
+ * GLFW 3.4 and later choose Wayland whenever WAYLAND_DISPLAY is set, which
+ * WSLg always does next to its X server. That swaps GLX for EGL, and on WSLg
+ * EGL probes Mesa's zink driver and complains before settling on the same
+ * llvmpipe renderer. Everything here was built and checked on X11, so X11 is
+ * tried first. When no X server answers, GLFW gets its own choice back.
+ *
+ * The error callback is installed only after the X11 attempt, so a missing X
+ * server is not reported as a failure when Wayland then works. Older GLFW has
+ * no platform selection and only speaks X11 on Linux.
+ */
+static bool s_init_glfw(void)
+{
+#if GLFW_VERSION_MAJOR > 3 || (GLFW_VERSION_MAJOR == 3 && GLFW_VERSION_MINOR >= 4)
+    if (glfwPlatformSupported(GLFW_PLATFORM_X11) == GLFW_TRUE) {
+        glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+        if (glfwInit() == GLFW_TRUE) {
+            glfwSetErrorCallback(s_glfw_error);
+            return true;
+        }
+        glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
+    }
+#endif
+    glfwSetErrorCallback(s_glfw_error);
+    return glfwInit() == GLFW_TRUE;
+}
+
+/**
  * @brief Render the scene into its texture and place that texture in the panel.
  *
  * @return The panel's geometry and pointer state, for routing camera input.
@@ -566,8 +595,7 @@ int main(int argc, char **argv)
     }
     const bool capturing = options.shot_path != NULL;
 
-    glfwSetErrorCallback(s_glfw_error);
-    if (glfwInit() == GLFW_FALSE) {
+    if (!s_init_glfw()) {
         fprintf(stderr, "glfw: init failed\n");
         return 1;
     }
