@@ -96,6 +96,7 @@ bool rbt_shader_build(rbt_shader_t *shader, const char *vertex_src, const char *
     shader->u_normal_matrix = glGetUniformLocation(program, "u_normal_matrix");
     shader->u_color         = glGetUniformLocation(program, "u_color");
     shader->u_light_pos     = glGetUniformLocation(program, "u_light_pos");
+    shader->u_fill_light_pos = glGetUniformLocation(program, "u_fill_light_pos");
     shader->u_view_pos      = glGetUniformLocation(program, "u_view_pos");
     return true;
 }
@@ -114,7 +115,8 @@ void rbt_shader_set_frame(const rbt_shader_t *shader,
                           const Matrix4f &view,
                           const Matrix4f &projection,
                           const Vector3f &eye_pos,
-                          const Vector3f &light_pos)
+                          const Vector3f &light_pos,
+                          const Vector3f &fill_light_pos)
 {
     assert(shader != NULL);
     assert(shader->program != 0);
@@ -132,6 +134,9 @@ void rbt_shader_set_frame(const rbt_shader_t *shader,
     }
     if (shader->u_light_pos >= 0) {
         glUniform3f(shader->u_light_pos, light_pos.x(), light_pos.y(), light_pos.z());
+    }
+    if (shader->u_fill_light_pos >= 0) {
+        glUniform3f(shader->u_fill_light_pos, fill_light_pos.x(), fill_light_pos.y(), fill_light_pos.z());
     }
 }
 

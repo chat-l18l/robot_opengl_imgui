@@ -22,6 +22,7 @@
 #include "gl_mesh.h"
 #include "gl_shader.h"
 #include "gl_target.h"
+#include "gltf_load.h"
 #include "robot.h"
 #include "screenshot.h"
 #include "ui_layout.h"
@@ -78,11 +79,11 @@ in vec3 v_normal;
 
 uniform vec3 u_color;
 uniform vec3 u_light_pos;
+uniform vec3 u_fill_light_pos;
 uniform vec3 u_view_pos;
 
 out vec4 frag_color;
 
-const vec3  FILL_LIGHT_POS = vec3(-3.0, 5.0, -5.0);
 const float AMBIENT        = 0.35;
 const float KEY_STRENGTH   = 0.80;
 const float FILL_STRENGTH  = 0.25;
@@ -95,7 +96,7 @@ void main()
     vec3 view_dir = normalize(u_view_pos - v_world_pos);
 
     vec3 key_dir  = normalize(u_light_pos - v_world_pos);
-    vec3 fill_dir = normalize(FILL_LIGHT_POS - v_world_pos);
+    vec3 fill_dir = normalize(u_fill_light_pos - v_world_pos);
 
     vec3 lit = u_color * (AMBIENT
                         + KEY_STRENGTH  * max(dot(normal, key_dir),  0.0)
@@ -121,15 +122,28 @@ static const float s_window_clear[3] = {0.12f, 0.13f, 0.16f};
 /** Viewport background, behind the 3D scene. */
 static const float s_viewport_clear[3] = {0.09f, 0.10f, 0.13f};
 /** Key light position in world space. */
-static const Vector3f s_light_pos(5.0f, 8.0f, 5.0f);
+/*
+ * The light rig and the grid are set once per model. The built-in arm uses
+ * the values below; a loaded model gets the same rig scaled to its size by
+ * s_fit_scene_to, so a 200-unit sample model is not lit from inside itself.
+ */
+static Vector3f s_key_light(5.0f, 8.0f, 5.0f);
+static Vector3f s_fill_light(-3.0f, 5.0f, -5.0f);
+static float    s_grid_scale = 1.0f;
+
+/* The same rig as offsets per unit of camera distance from the target. For
+ * the built-in view, target (0, 1.5, 0) at distance 8, these reproduce the
+ * positions above exactly: every factor is a short binary fraction. */
+static const Vector3f s_key_light_per_distance(0.625f, 0.8125f, 0.625f);
+static const Vector3f s_fill_light_per_distance(-0.375f, 0.4375f, -0.625f);
+/** Distance of the built-in view, which the grid's default size was chosen for. */
+static const float    s_builtin_view_distance = 8.0f;
 /** Grid colour, dim enough to stay behind the arm. */
 static const float s_grid_color[3] = {0.25f, 0.25f, 0.28f};
 
 static const float s_grid_size      = 10.0f;
 static const int   s_grid_divisions = 20;
 static const float s_fov_deg        = 45.0f;
-static const float s_z_near         = 0.1f;
-static const float s_z_far          = 100.0f;
 
 /** Inset of the hint text from the viewport's top-left corner, in pixels. */
 static const float s_overlay_margin = 10.0f;
@@ -150,6 +164,7 @@ static char s_layout_path[PATH_MAX];
 static rbt_shader_t s_shader;
 static rbt_robot_t  s_robot;
 static rbt_camera_t s_camera;
+static rbt_camera_t s_home_camera;  /**< Where "Reset Camera" returns to: the view the model opened with. */
 static rbt_mesh_t   s_grid;
 static rbt_target_t s_target;
 
@@ -259,6 +274,7 @@ static const char *s_resolve_layout_path(void)
 /** @brief Options. Capturing is off unless --shot is given. */
 typedef struct {
     const char *shot_path;      /**< PNG to write, NULL to run interactively. */
+    const char *model_path;     /**< glTF file to show instead of the built-in arm. */
     const char *pose;           /**< Comma-separated joint angles in degrees. */
     int         width;
     int         height;
@@ -280,6 +296,7 @@ static void s_print_usage(const char *program)
     fprintf(stderr,
             "usage: %s [options]\n"
             "\n"
+            "  --model FILE     show a glTF 2.0 model (.gltf or .glb) instead of the built-in arm\n"
             "  --shot FILE      render one frame to a PNG and exit\n"
             "  --size WxH       window size (default 1280x800)\n"
             "  --view YAW,PITCH,DISTANCE   camera placement, degrees and units\n"
@@ -351,6 +368,8 @@ static bool s_parse_options(rbt_options_t *options, int argc, char **argv, bool 
             return true;
         } else if (strcmp(arg, "--bare") == 0) {
             options->crop_to_view = true;
+        } else if (strcmp(arg, "--model") == 0 && has_value) {
+            options->model_path = argv[++i];
         } else if (strcmp(arg, "--shot") == 0 && has_value) {
             options->shot_path = argv[++i];
         } else if (strcmp(arg, "--pose") == 0 && has_value) {
@@ -489,17 +508,22 @@ static rbt_viewport_t s_draw_viewport(void)
     glClearColor(s_viewport_clear[0], s_viewport_clear[1], s_viewport_clear[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    const Matrix4f projection  = rbt_perspective(s_fov_deg, view.size.x / view.size.y, s_z_near, s_z_far);
+    const Matrix4f projection  = rbt_perspective(s_fov_deg, view.size.x / view.size.y,
+                                                       s_camera.z_near, s_camera.z_far);
     const Matrix4f camera_view = rbt_camera_view(&s_camera);
 
-    rbt_shader_set_frame(&s_shader, camera_view, projection, rbt_camera_eye(&s_camera), s_light_pos);
+    rbt_shader_set_frame(&s_shader, camera_view, projection, rbt_camera_eye(&s_camera),
+                         s_key_light, s_fill_light);
 
     glPolygonMode(GL_FRONT_AND_BACK, s_wireframe ? GL_LINE : GL_FILL);
 
     if (s_show_grid) {
         /* A hair below the floor plane: the pedestal stands at exactly y = 0,
          * and coplanar geometry z-fights. */
-        rbt_shader_set_object(&s_shader, rbt_translation(0.0f, -0.002f, 0.0f), s_grid_color);
+        rbt_shader_set_object(&s_shader,
+                              rbt_translation(0.0f, -0.002f * s_grid_scale, 0.0f)
+                                  * rbt_scale(s_grid_scale, s_grid_scale, s_grid_scale),
+                              s_grid_color);
         rbt_mesh_draw(&s_grid);
     }
 
@@ -542,7 +566,7 @@ static void s_draw_control_panel(void)
         }
         ImGui::SameLine();
         if (ImGui::Button("Reset Camera")) {
-            rbt_camera_reset(&s_camera);
+            s_camera = s_home_camera;
         }
     }
 
@@ -578,7 +602,8 @@ static void s_draw_control_panel(void)
 
         ImGui::Separator();
         ImGui::Text("Camera");
-        ImGui::SliderFloat("Distance", &s_camera.distance, 2.0f, 20.0f);
+        ImGui::SliderFloat("Distance", &s_camera.distance, s_camera.min_distance, s_camera.max_distance,
+                           "%.2f", ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat("Yaw", &s_camera.yaw_deg, -180.0f, 180.0f);
         ImGui::SliderFloat("Pitch", &s_camera.pitch_deg, -89.0f, 89.0f);
     }
@@ -602,10 +627,37 @@ static void s_draw_control_panel(void)
  * Main
  * ============================================================ */
 
+/**
+ * @brief Frame a loaded model and scale the light rig and the grid to it.
+ *
+ * Pre: the robot's meshes are uploaded and its forward kinematics are current.
+ */
+static void s_fit_scene_to(const rbt_robot_t *robot)
+{
+    Vector3f box_min;
+    Vector3f box_max;
+    if (!rbt_robot_bounds(robot, &box_min, &box_max)) {
+        return;
+    }
+
+    rbt_camera_frame_box(&s_camera, box_min, box_max, s_fov_deg);
+
+    const Vector3f per_distance_key  = s_key_light_per_distance * s_camera.distance;
+    const Vector3f per_distance_fill = s_fill_light_per_distance * s_camera.distance;
+    s_key_light  = s_camera.target + per_distance_key;
+    s_fill_light = s_camera.target + per_distance_fill;
+    s_grid_scale = s_camera.distance / s_builtin_view_distance;
+}
+
 int main(int argc, char **argv)
 {
-    rbt_options_t options = {NULL, NULL, 1280, 800, s_default_warmup,
-                             0.0f, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, false, false, false};
+    /* Value-initialised: pointers NULL, numbers zero, flags false. Only the
+     * fields with other defaults are set by name, so adding a field cannot
+     * shift the others. */
+    rbt_options_t options = {};
+    options.width         = 1280;
+    options.height        = 800;
+    options.warmup_frames = s_default_warmup;
     bool help_requested = false;
     if (!s_parse_options(&options, argc, argv, &help_requested)) {
         return 1;
@@ -673,6 +725,29 @@ int main(int argc, char **argv)
     }
 
     rbt_camera_reset(&s_camera);
+
+    if (options.model_path != NULL) {
+        if (!rbt_gltf_load(&s_robot, options.model_path)) {
+            return 1;
+        }
+        int movable = 0;
+        for (const rbt_joint_t &joint : s_robot.joints) {
+            movable += (joint.type == RBT_JOINT_REVOLUTE) ? 1 : 0;
+        }
+        printf("model: %s: %zu frames, %d movable joints, %zu meshes, %zu visuals\n",
+               s_robot.name, s_robot.joints.size(), movable, s_robot.meshes.size(), s_robot.visuals.size());
+    } else {
+        rbt_robot_build_builtin(&s_robot);
+    }
+    rbt_robot_upload_meshes(&s_robot);
+
+    /* A loaded model can be any size, so it is framed in its rest pose. The
+     * built-in arm keeps the view it was tuned for. */
+    if (options.model_path != NULL) {
+        rbt_robot_update_fk(&s_robot);
+        s_fit_scene_to(&s_robot);
+    }
+
     if (options.has_camera) {
         s_camera.yaw_deg   = options.yaw_deg;
         s_camera.pitch_deg = options.pitch_deg;
@@ -681,9 +756,8 @@ int main(int argc, char **argv)
     if (options.has_target) {
         s_camera.target = Vector3f(options.target[0], options.target[1], options.target[2]);
     }
+    s_home_camera = s_camera;
 
-    rbt_robot_build_builtin(&s_robot);
-    rbt_robot_upload_meshes(&s_robot);
     if (options.pose != NULL) {
         s_apply_pose(options.pose);
     }

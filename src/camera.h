@@ -14,6 +14,14 @@ typedef struct {
     float    pitch_deg;  /**< Elevation, clamped to (-90, 90). */
     Vector3f target;     /**< Point the camera looks at. */
 
+    /* Scale-dependent limits. A 30 cm gripper and a 200-unit sample model need
+     * very different zoom ranges and clip planes, so they travel with the
+     * camera and are reset by rbt_camera_frame_box rather than being fixed. */
+    float min_distance;  /**< Closest the wheel may zoom. */
+    float max_distance;  /**< Furthest the wheel may zoom. */
+    float z_near;        /**< Near clip plane distance. */
+    float z_far;         /**< Far clip plane distance. */
+
     /* Which drag ran last frame, so the first frame of a new one seeds the
      * reference position instead of jumping by a stale delta. */
     bool  orbiting;      /**< An orbit drag was active last frame. */
@@ -41,6 +49,17 @@ typedef struct {
 
 /** @brief Restore the default framing. */
 void rbt_camera_reset(rbt_camera_t *camera);
+
+/**
+ * @brief Aim at a box and back off until it fits, scaling the limits with it.
+ *
+ * Keeps the current yaw and pitch. The zoom range and clip planes are set
+ * relative to the new distance, so a model of any size stays zoomable and
+ * unclipped.
+ *
+ * @param fov_deg Vertical field of view the view will be rendered with.
+ */
+void rbt_camera_frame_box(rbt_camera_t *camera, const Vector3f &box_min, const Vector3f &box_max, float fov_deg);
 
 /** @brief Eye position in world space, derived from yaw, pitch and distance. */
 Vector3f rbt_camera_eye(const rbt_camera_t *camera);

@@ -28,6 +28,7 @@ typedef struct {
     GLint  u_normal_matrix;  /**< mat3 inverse-transpose of the model matrix. */
     GLint  u_color;          /**< vec3 base colour. */
     GLint  u_light_pos;      /**< vec3 key light position in world space. */
+    GLint  u_fill_light_pos; /**< vec3 fill light position in world space. */
     GLint  u_view_pos;       /**< vec3 camera position in world space. */
 } rbt_shader_t;
 
@@ -56,7 +57,8 @@ void rbt_shader_set_frame(const rbt_shader_t *shader,
                           const Matrix4f &view,
                           const Matrix4f &projection,
                           const Vector3f &eye_pos,
-                          const Vector3f &light_pos);
+                          const Vector3f &light_pos,
+                          const Vector3f &fill_light_pos);
 
 /**
  * @brief Upload the per-object state: model matrix, normal matrix and colour.

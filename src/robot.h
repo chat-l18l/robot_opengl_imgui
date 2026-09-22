@@ -109,6 +109,15 @@ void rbt_robot_update_fk(rbt_robot_t *robot);
 void rbt_robot_draw(const rbt_robot_t *robot, const rbt_shader_t *shader);
 
 /**
+ * @brief World-space bounding box of everything drawn, in the current pose.
+ *
+ * Pre: the meshes are uploaded, which is when their bounds are recorded, and
+ * rbt_robot_update_fk has run.
+ * @return false when there is nothing to draw.
+ */
+bool rbt_robot_bounds(const rbt_robot_t *robot, Vector3f *box_min, Vector3f *box_max);
+
+/**
  * @brief Describe an axis for the UI: "X", "-Z", or the vector itself.
  * @param out Caller-owned buffer, always terminated.
  */

@@ -44,6 +44,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
+# ============================================================
+# cgltf (fetched from GitHub)
+#
+# One header and no build system of its own, so fetching it only makes its
+# directory available. Not packaged on conda-forge, which is why it is here
+# rather than in pixi.toml.
+# ============================================================
+FetchContent_Declare(
+    cgltf
+    GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
+    GIT_TAG        v1.15
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(cgltf)
+
 set(IMGUI_DIR ${imgui_SOURCE_DIR})
 add_library(imgui STATIC
     ${IMGUI_DIR}/imgui.cpp
@@ -67,12 +82,14 @@ add_executable(robot_viewer
     src/gl_mesh.cpp
     src/gl_shader.cpp
     src/gl_target.cpp
+    src/gltf_load.cpp
     src/ui_layout.cpp
     src/robot.cpp
     src/screenshot.cpp
 )
 target_include_directories(robot_viewer PRIVATE src)
 target_include_directories(robot_viewer SYSTEM PRIVATE
+    ${cgltf_SOURCE_DIR}
     ${EIGEN_INCLUDE_DIRS}
     ${GLFW_INCLUDE_DIRS}
     ${GL_INCLUDE_DIRS}

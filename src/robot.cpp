@@ -285,6 +285,38 @@ void rbt_robot_draw(const rbt_robot_t *robot, const rbt_shader_t *shader)
     }
 }
 
+bool rbt_robot_bounds(const rbt_robot_t *robot, Vector3f *box_min, Vector3f *box_max)
+{
+    assert(robot != NULL);
+    assert(box_min != NULL);
+    assert(box_max != NULL);
+
+    bool any = false;
+    for (const rbt_visual_t &visual : robot->visuals) {
+        const rbt_mesh_t &mesh  = robot->meshes[(size_t)visual.mesh];
+        const Matrix4f    model = robot->joints[(size_t)visual.joint].world_transform * visual.local;
+
+        /* All eight corners: a rotated box's extent is not its min and max
+         * corners transformed. */
+        for (int corner = 0; corner < 8; corner++) {
+            const Vector3f local((corner & 1) ? mesh.bounds_max.x() : mesh.bounds_min.x(),
+                                 (corner & 2) ? mesh.bounds_max.y() : mesh.bounds_min.y(),
+                                 (corner & 4) ? mesh.bounds_max.z() : mesh.bounds_min.z());
+            const Vector3f world = (model * local.homogeneous()).head<3>();
+
+            if (!any) {
+                *box_min = world;
+                *box_max = world;
+                any = true;
+            } else {
+                *box_min = box_min->cwiseMin(world);
+                *box_max = box_max->cwiseMax(world);
+            }
+        }
+    }
+    return any;
+}
+
 void rbt_axis_format(const Vector3f &axis, char *out, size_t out_size)
 {
     assert(out != NULL);
