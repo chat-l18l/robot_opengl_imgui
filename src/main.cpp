@@ -764,8 +764,14 @@ int main(int argc, char **argv)
     }
     rbt_robot_upload_meshes(&s_robot);
 
-    /* A loaded model can be any size, so it is framed in its rest pose. The
-     * built-in arm keeps the view it was tuned for. */
+    /* The pose goes first, so that a loaded model is framed the way it will
+     * be shown: a UR5 lies flat at rest and stands up once posed. */
+    if (options.pose != NULL) {
+        s_apply_pose(options.pose);
+    }
+
+    /* A loaded model can be any size, so it is framed to fit. The built-in
+     * arm keeps the view it was tuned for. */
     if (options.model_path != NULL) {
         rbt_robot_update_fk(&s_robot);
         s_fit_scene_to(&s_robot);
@@ -780,10 +786,6 @@ int main(int argc, char **argv)
         s_camera.target = Vector3f(options.target[0], options.target[1], options.target[2]);
     }
     s_home_camera = s_camera;
-
-    if (options.pose != NULL) {
-        s_apply_pose(options.pose);
-    }
 
     s_grid = rbt_mesh_make_grid(s_grid_size, s_grid_divisions);
     rbt_mesh_upload(&s_grid);
