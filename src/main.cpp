@@ -387,20 +387,28 @@ static bool s_parse_options(rbt_options_t *options, int argc, char **argv, bool 
     return true;
 }
 
-/** @brief Apply comma-separated angles to the joints, clamped to their limits. */
+/**
+ * @brief Apply comma-separated angles to the movable joints, clamped to their limits.
+ *
+ * Fixed joints are skipped, so the angles line up with the sliders in the panel.
+ */
 static void s_apply_pose(const char *text)
 {
     assert(text != NULL);
 
     const char *cursor = text;
     for (size_t i = 0; i < s_robot.joints.size() && *cursor != '\0'; i++) {
+        rbt_joint_t &joint = s_robot.joints[i];
+        if (joint.type != RBT_JOINT_REVOLUTE) {
+            continue;
+        }
+
         char *end = NULL;
         const float degrees = strtof(cursor, &end);
         if (end == cursor) {
             break;
         }
 
-        rbt_joint_t &joint = s_robot.joints[i];
         float angle = degrees;
         if (angle < joint.min_angle_deg) {
             angle = joint.min_angle_deg;
@@ -541,12 +549,18 @@ static void s_draw_control_panel(void)
     if (ImGui::CollapsingHeader("Joints", ImGuiTreeNodeFlags_DefaultOpen)) {
         for (size_t i = 0; i < s_robot.joints.size(); i++) {
             rbt_joint_t &joint = s_robot.joints[i];
+            if (joint.type != RBT_JOINT_REVOLUTE) {
+                continue;
+            }
+
+            char axis_label[48];
+            rbt_axis_format(joint.axis, axis_label, sizeof(axis_label));
 
             ImGui::PushID((int)i);
             ImGui::Separator();
 
             ImGui::TextColored(ImVec4(joint.color[0], joint.color[1], joint.color[2], 1.0f),
-                               "%s [%s]", joint.name, rbt_axis_label(joint.axis));
+                               "%s [%s]", joint.name, axis_label);
 
             ImGui::SliderFloat("##angle", &joint.angle_deg,
                                joint.min_angle_deg, joint.max_angle_deg, "%.1f deg");
@@ -570,7 +584,13 @@ static void s_draw_control_panel(void)
     }
 
     if (ImGui::CollapsingHeader("Info")) {
-        ImGui::Text("6-DOF manipulator, %zu joints", s_robot.joints.size());
+        int movable = 0;
+        for (const rbt_joint_t &joint : s_robot.joints) {
+            movable += (joint.type == RBT_JOINT_REVOLUTE) ? 1 : 0;
+        }
+        ImGui::TextUnformatted(s_robot.name);
+        ImGui::Text("%d movable joints, %zu frames, %zu meshes",
+                    movable, s_robot.joints.size(), s_robot.meshes.size());
         ImGui::Separator();
         ImGui::Text("%.1f FPS (%.2f ms)", io.Framerate, 1000.0f / io.Framerate);
     }
@@ -662,7 +682,7 @@ int main(int argc, char **argv)
         s_camera.target = Vector3f(options.target[0], options.target[1], options.target[2]);
     }
 
-    rbt_robot_build(&s_robot);
+    rbt_robot_build_builtin(&s_robot);
     rbt_robot_upload_meshes(&s_robot);
     if (options.pose != NULL) {
         s_apply_pose(options.pose);

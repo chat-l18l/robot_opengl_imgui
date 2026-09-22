@@ -1,6 +1,11 @@
 /**
  * @file robot.h
- * @brief Robot arm: joint array, forward kinematics and rendering.
+ * @brief Robot: joints for the kinematics, visuals for the geometry.
+ *
+ * The two are kept apart on purpose. A joint says where a frame is and how it
+ * may move; a visual says what to draw in that frame. That is the split URDF
+ * makes between joints and links, and it lets the built-in arm and a loaded
+ * model go through exactly the same forward kinematics and the same draw loop.
  */
 
 #pragma once
@@ -8,71 +13,85 @@
 #include "gl_mesh.h"
 #include "gl_shader.h"
 
+#include <stddef.h>
 #include <vector>
 
-/** @brief Rotation axis of a revolute joint, in its own frame. */
-typedef enum {
-    RBT_AXIS_X = 0,
-    RBT_AXIS_Y,
-    RBT_AXIS_Z,
-} rbt_axis_t;
+/** Room for a joint or model name, terminator included; longer names are cut. */
+#define RBT_NAME_SIZE 64
 
-/** @brief Parent index of a joint that has none. Only the root carries it. */
+/** @brief Parent index of a joint that has none. */
 #define RBT_NO_PARENT (-1)
 
+/** @brief How a joint moves relative to its parent. */
+typedef enum {
+    RBT_JOINT_FIXED = 0,  /**< Rigidly attached: carries geometry, never moves. */
+    RBT_JOINT_REVOLUTE,   /**< Rotates about @ref rbt_joint_t::axis between two limits. */
+} rbt_joint_type_t;
+
 /**
- * @brief One revolute joint and the link that reaches it from its parent.
+ * @brief One frame in the kinematic tree.
  *
- * Joints live in one flat array and name their parent by index, the usual
- * representation in robotics. A parent always sits earlier in the array, so
- * forward kinematics is a single forward pass: no recursion, no pointers to
- * keep valid, and the whole chain walks contiguous memory.
- *
- * The link is not stored separately: its length is the Y component of
- * @ref offset, so there is exactly one place that says how long it is.
+ * Joints live in one flat array and name their parent by index. A parent
+ * always sits earlier in the array, so forward kinematics is a single forward
+ * pass: no recursion, no pointers to keep valid, contiguous memory.
  */
 typedef struct {
-    const char *name;             /**< Static string; joints do not own their name. */
-    rbt_axis_t  axis;             /**< Rotation axis. */
-    int         parent;           /**< Index of the parent joint, or RBT_NO_PARENT. */
-    int         child_count;      /**< Filled by rbt_robot_build; 0 marks a tool tip. */
+    char             name[RBT_NAME_SIZE];
+    rbt_joint_type_t type;
+    int              parent;             /**< Index of the parent joint, or RBT_NO_PARENT. */
+    int              child_count;        /**< Filled by rbt_robot_finalize; 0 marks a tip. */
 
-    float       min_angle_deg;    /**< Lower travel limit. */
-    float       max_angle_deg;    /**< Upper travel limit. */
-    float       default_angle_deg;/**< Pose restored by rbt_robot_reset_joints. */
-    float       angle_deg;        /**< Live angle, driven by the UI. */
+    Matrix4f         origin;             /**< Rest pose in the parent frame: translation and rotation. */
+    Vector3f         axis;               /**< Unit rotation axis in this joint's frame. */
 
-    Vector3f    offset;           /**< Parent joint to this joint, in the parent frame. */
-    float       link_radius;      /**< Radius of the link drawn along that offset. */
-    float       color[3];         /**< RGB in 0..1, for the link and the joint marker. */
+    float            min_angle_deg;      /**< Lower travel limit. */
+    float            max_angle_deg;      /**< Upper travel limit. */
+    float            default_angle_deg;  /**< Pose restored by rbt_robot_reset_joints. */
+    float            angle_deg;          /**< Live angle, driven by the UI. */
+    float            color[3];           /**< Colour key shown next to the joint in the panel. */
 
-    Matrix4f    world_transform;  /**< Written by rbt_robot_update_fk. */
+    Matrix4f         world_transform;    /**< Written by rbt_robot_update_fk. */
 } rbt_joint_t;
 
+/** @brief A mesh drawn in a joint's frame. */
+typedef struct {
+    int      joint;     /**< Index into rbt_robot_t::joints. */
+    int      mesh;      /**< Index into rbt_robot_t::meshes. */
+    Matrix4f local;     /**< Placement within the joint frame. */
+    float    color[3];  /**< RGB in 0..1. */
+} rbt_visual_t;
+
 /**
- * @brief The arm: its joints and the primitives they are drawn with.
+ * @brief A robot: its kinematic tree, its meshes, and what is drawn where.
  *
- * The topology is fixed once rbt_robot_build has run. @ref rbt_joint_t::parent
- * and @ref rbt_joint_t::child_count describe it, and nothing recomputes them.
+ * Visuals refer to joints and meshes by index rather than by pointer, so the
+ * arrays can grow while a model is being assembled. The topology is fixed
+ * once rbt_robot_finalize has run.
  */
 typedef struct {
-    std::vector<rbt_joint_t> joints;  /**< Root first; every parent precedes its children. */
-
-    rbt_mesh_t cylinder;              /**< Unit cylinder: radius 1, height 1, along +Y. */
-    rbt_mesh_t sphere;                /**< Unit sphere: radius 1. */
-    rbt_mesh_t box;                   /**< Unit cube. */
+    char                      name[RBT_NAME_SIZE];
+    std::vector<rbt_joint_t>  joints;   /**< Every parent precedes its children. */
+    std::vector<rbt_mesh_t>   meshes;
+    std::vector<rbt_visual_t> visuals;  /**< Drawn in this order. */
 } rbt_robot_t;
 
 /**
- * @brief Build the joint array and generate the primitive meshes on the CPU.
+ * @brief Build the built-in six-axis arm, on the CPU only.
  *
  * No GL calls happen here, so this may run before a context exists.
- * Post: every joint sits at its default angle, and parent and child counts
- * describe the arm.
+ * Post: every joint sits at its default angle and the robot is finalised.
  */
-void rbt_robot_build(rbt_robot_t *robot);
+void rbt_robot_build_builtin(rbt_robot_t *robot);
 
-/** @brief Upload the primitives. Pre: a GL context is current. */
+/**
+ * @brief Derive the per-joint bookkeeping once the joint array is complete.
+ *
+ * Pre: every joint's parent precedes it. That ordering is what the rest of the
+ * code relies on, so a violation is a programmer error and asserts.
+ */
+void rbt_robot_finalize(rbt_robot_t *robot);
+
+/** @brief Upload every mesh. Pre: a GL context is current. */
 void rbt_robot_upload_meshes(rbt_robot_t *robot);
 
 /** @brief Restore every joint to its default angle. */
@@ -82,12 +101,18 @@ void rbt_robot_reset_joints(rbt_robot_t *robot);
 void rbt_robot_update_fk(rbt_robot_t *robot);
 
 /**
- * @brief Draw the arm.
+ * @brief Draw every visual.
  *
  * Pre: rbt_robot_update_fk ran this frame and rbt_shader_set_frame was called
  * on @p shader.
  */
 void rbt_robot_draw(const rbt_robot_t *robot, const rbt_shader_t *shader);
 
-/** @brief Short label for a rotation axis, for the UI. */
-const char *rbt_axis_label(rbt_axis_t axis);
+/**
+ * @brief Describe an axis for the UI: "X", "-Z", or the vector itself.
+ * @param out Caller-owned buffer, always terminated.
+ */
+void rbt_axis_format(const Vector3f &axis, char *out, size_t out_size);
+
+/** @brief Copy a name into a fixed buffer, cutting it if it does not fit. */
+void rbt_name_copy(char out[RBT_NAME_SIZE], const char *name);
